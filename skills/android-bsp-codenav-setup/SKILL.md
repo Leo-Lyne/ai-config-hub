@@ -1,19 +1,15 @@
 ---
 name: android-bsp-codenav-setup
-description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码导航环境。当用户需要：生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、生成 AGENTS.md 指令文件、配置 Active Filter，或用户说"配置代码导航"、"重建索引"、"更新 compdb"时，使用此 skill。代码检索规则请使用 android-bsp-codesearch skill。'
+description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码导航环境。当用户需要：生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、生成 AGENTS.md 指令文件、配置 Active Filter，或用户说"配置代码导航"、"重建索引"、"更新 compdb"时，使用此 skill。
 ---
 
-# android-bsp-codenav-setup — Android BSP 项目代码导航环境搭建
-
-> **注意**：本 skill 负责环境搭建（工具安装、索引构建、指令文件生成）。日常代码检索的工具选择和策略请参考 `android-bsp-codesearch` skill。
+# android-bsp-codenav-setup — Android BSP项目代码导航环境
 
 ---
 
 ## 前提条件
-
-使用此 skill 为android bsp项目配置代码导航工具前确认两个前提：
-1. **已有完整 Android BSP 包**（含内核、HAL、vendor 等）
-2. **已完整编译通过一次**（ninja 文件和构建产物存在）
+1. 此项目是完整的完整 Android Board Supprt Package（包含完整Android源码工程）
+2. **已完整编译通过**（ninja 文件和构建产物存在）
 
 本 skill 接收用户的编译命令作为参数（如 `source build/envsetup.sh && lunch rk3568_r-userdebug`），自动从中解析 product name、vendor、lunch target 等信息。`$BSP_ROOT` 默认为当前工作目录。
 

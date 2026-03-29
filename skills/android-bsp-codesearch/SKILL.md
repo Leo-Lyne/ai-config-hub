@@ -5,6 +5,10 @@ description: 'Android BSP 项目代码检索决策指南。当 AI Agent 在 BSP 
 
 # android-bsp-codesearch — Android BSP 代码检索决策指南
 
+## 前提条件
+
+1. Android BSP项目代码导航环境配置完成（可按android-bsp-codenav-setup skill进行验证）
+
 **所有 AI Agent（Claude Code、Opencode、Cursor、Codex、Antigravity .etc）在 BSP 项目中搜索代码时应遵守以下规则。**
 
 ## 工具能力矩阵
