@@ -1,9 +1,9 @@
 ---
 name: android-bsp-codenav-setup
-description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码检索环境。当用户需要：搜索代码/符号/函数定义、生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、配置 CLAUDE.md 自动调用索引工具，或用户说"帮我找函数"、"重建索引"、"更新 compdb"、"搜一下这个结构体"时，必须使用此 skill。'
+description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码检索环境。当用户需要：搜索代码/符号/函数定义、生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、配置 AGENTS.md 自动调用索引工具，或用户说"帮我找函数"、"重建索引"、"更新 compdb"、"搜一下这个结构体"时，必须使用此 skill。'
 ---
 
-# android-bsp-codenav-setup — Android BSP 代码导航环境全流程
+# android-bsp-codenav-setup — Android BSP 项目配置代码导航环境全流程
 
 ---
 
@@ -132,12 +132,7 @@ gtags 数据库不存在
 1. **已有完整 Android BSP 包**（含内核、HAL、vendor 等）
 2. **已完整编译通过一次**（ninja 文件和构建产物存在）
 
-确认 BSP 根目录和编译命令（通常可从上下文获取）：
-
-| 变量 | 获取方式 | 示例 |
-|------|----------|------|
-| `$BSP_ROOT` | `echo $ANDROID_BUILD_TOP` 或 `pwd` | 当前工作目录 |
-| `$LUNCH_TARGET` | 从编译命令解析 | `rk3568_r-userdebug`、`lahaina-userdebug`、`k6785v1_64-userdebug`、`sp9863a-userdebug` |
+本 skill 接收用户的编译命令作为参数（如 `source build/envsetup.sh && lunch rk3568_r-userdebug`），自动从中解析 product name、vendor、lunch target 等信息。`$BSP_ROOT` 默认为当前工作目录。
 
 ---
 
