@@ -1,6 +1,6 @@
 ---
 name: android-bsp-codenav-setup
-description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码导航环境。当用户需要：生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、生成 AGENTS.md 指令文件、配置 Active Filter，或用户说"配置代码导航"、"重建索引"、"更新 compdb"时，使用此 skill。
+description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码导航环境。当用户需要：生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、生成 AGENTS.md 指令文件、配置 Active Filter，或用户说"配置代码导航"、"重建索引"、"更新 compdb"时，使用此 skill。'
 ---
 
 # android-bsp-codenav-setup — Android BSP项目代码导航环境
