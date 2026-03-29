@@ -44,18 +44,32 @@ echo "--- 正在同步 MCP 配置 ---"
 
 MASTER_MCP="$HUB_DIR/mcp/master_mcp.json"
 if [ -f "$MASTER_MCP" ]; then
-    # Antigravity
+    MCP_SERVERS=$(jq '.mcpServers' "$MASTER_MCP")
+
+    # Antigravity — 纯 MCP 配置，可以直接软链接
     mkdir -p "$HOME/.gemini/antigravity"
     ln -sfn "$MASTER_MCP" "$HOME/.gemini/antigravity/mcp_config.json"
-    
-    # Claude Code
-    ln -sfn "$MASTER_MCP" "$HOME/.claude.json"
-    
+
+    # Claude Code — ~/.claude.json 含运行时状态，只合并 mcpServers 字段
+    CLAUDE_JSON="$HOME/.claude.json"
+    if [ -L "$CLAUDE_JSON" ]; then
+        # 如果是软链接（旧方式），先转为独立文件
+        LINK_CONTENT=$(cat "$CLAUDE_JSON")
+        rm "$CLAUDE_JSON"
+        echo "$LINK_CONTENT" > "$CLAUDE_JSON"
+    fi
+    if [ -f "$CLAUDE_JSON" ]; then
+        jq --argjson servers "$MCP_SERVERS" '.mcpServers = $servers' "$CLAUDE_JSON" > "${CLAUDE_JSON}.tmp" \
+            && mv "${CLAUDE_JSON}.tmp" "$CLAUDE_JSON"
+    else
+        echo "{\"mcpServers\": $MCP_SERVERS}" > "$CLAUDE_JSON"
+    fi
+
     # Cursor
     mkdir -p "$HOME/.cursor"
     ln -sfn "$MASTER_MCP" "$HOME/.cursor/mcp.json"
-    
-    echo "✓ MCP 配置已同步到 Antigravity, Claude Code, Cursor"
+
+    echo "✓ MCP 配置已同步到 Antigravity, Claude Code (merge), Cursor"
 fi
 
 echo "--- 正在同步全局规则 ---"
