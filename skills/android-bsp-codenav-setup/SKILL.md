@@ -20,6 +20,7 @@ description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码检索
 | `fd` | ✗ | ✗ | ⭐⭐⭐ | ✗ | ⭐⭐ | ✗ |
 | `readtags` (ctags) | ⭐⭐ | ⭐ | ✗ | ✗ | ✗ | ✗ |
 | `locate` | ✗ | ✗ | ⭐⭐⭐ | ✗ | ✗ | ✗ |
+| `arg` (Active Ripgrep) | ⭐⭐⭐ | ⭐⭐⭐ | ✗ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐ |
 | OpenGrok MCP | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
 
 ### 按场景选择工具（优先级从高到低）
@@ -29,7 +30,7 @@ description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码检索
 fd <名称关键词> [目录]          # 首选：快速文件名搜索
 locate <文件名>                 # 备选：全局路径搜索（数据库可能不是最新）
 ```
-> 示例：找 defconfig → `fd "rk3568_defconfig" kernel/arch`
+> 示例：`fd "defconfig" kernel/arch` 或 `fd "<product>.mk" device/`
 
 #### 查找 C/C++ 函数/结构体/宏 定义
 ```
@@ -37,7 +38,7 @@ global -d <symbol>              # 首选：精确定义，支持 C/C++/Java
 global -s <partial>             # 模糊匹配符号名
 rg "^(static\s+)?(int|void|struct) <name>" --type c -l   # 备选：正则匹配函数签名
 ```
-> 示例：`global -d rockchip_drm_init`
+> 示例：`global -d drm_bridge_attach` 或 `global -d camera_provider_init`
 
 #### 查找符号的所有引用
 ```
@@ -63,7 +64,7 @@ rg "class <Name>|fun <name>|void <name>" --type java --type kotlin
 rg "<node-name>|<property>" --glob "*.dts" --glob "*.dtsi"
 fd -e dts -e dtsi "<关键词>" kernel/arch
 ```
-> 示例：`rg "rockchip,rk3568" --glob "*.dtsi"`
+> 示例：`rg "compatible.*<soc>" --glob "*.dtsi"` （如 `rg "compatible.*sm8350"`, `rg "compatible.*mt6785"`）
 
 #### 查找 HAL/AIDL/HIDL 接口
 ```
@@ -135,8 +136,8 @@ gtags 数据库不存在
 
 | 变量 | 获取方式 | 示例 |
 |------|----------|------|
-| `$BSP_ROOT` | `echo $ANDROID_BUILD_TOP` 或 `pwd` | `/home/leo/atk-rk3568_androidR_release_v1.4_20250104` |
-| `$LUNCH_TARGET` | 从编译命令解析 | `rk3568_r-userdebug`、`lahaina-userdebug`、`k65v1_64_bsp-user` |
+| `$BSP_ROOT` | `echo $ANDROID_BUILD_TOP` 或 `pwd` | 当前工作目录 |
+| `$LUNCH_TARGET` | 从编译命令解析 | `rk3568_r-userdebug`、`lahaina-userdebug`、`k6785v1_64-userdebug`、`sp9863a-userdebug` |
 
 ---
 
@@ -298,7 +299,7 @@ sudo updatedb --prunepaths="/proc /sys /dev /run $BSP_ROOT/out $BSP_ROOT/.repo"
 **验证：**
 
 ```bash
-locate "rk3568_r.mk" | head -5
+locate "$LUNCH_TARGET.mk" | head -5
 ```
 
 ---
@@ -504,7 +505,98 @@ alwaysApply: true
 
 ---
 
+## Phase 6：全栈 BSP 过滤器 (Active Filter)
+
+解决 Android 项目文件过多、搜索噪音大的问题。通过 `bsp_filter_gen.py` 融合三类数据源生成当前 Target 的活跃文件索引：
+
+| 数据源 | 覆盖范围 | 依赖条件 |
+|--------|----------|----------|
+| `compile_commands.json` | C/C++ 源码 | 已完成编译 |
+| `module-info.json` + `installed-files.txt` | Java/Kotlin 模块源码 | 已完成编译 |
+| Build command 解析 | DTS include 链、defconfig、设备树模板、device configs | 提供 `--build-cmd` |
+
+脚本支持所有 AOSP 派生平台（Rockchip、Qualcomm、MTK、展锐等），自动检测 vendor、kernel 目录和 DTS 路径。
+
+### 6.1 部署脚本
+
+将本 skill 附带的两个脚本复制到项目中：
+
+```bash
+cp <skill_path>/scripts/bsp_filter_gen.py $BSP_ROOT/scripts/
+cp <skill_path>/scripts/arg.sh $BSP_ROOT/scripts/
+chmod +x $BSP_ROOT/scripts/bsp_filter_gen.py $BSP_ROOT/scripts/arg.sh
+```
+
+`<skill_path>` 是本 skill 所在目录。如脚本已存在则跳过。
+
+### 6.2 生成索引
+
+**传入项目的编译命令**（通过 `-b` 参数），脚本会自动：
+- 从 `lunch` 参数解析 product name，自动检测 vendor
+- 定位 `device/<vendor>/[<soc>/]<product>/BoardConfig.mk`，提取 DTS 和 defconfig 变量
+- 遍历所有可能的 kernel 目录（`kernel/`、`kernel-5.10/`、`bsp/kernel/` 等）
+- 递归追踪 DTS `#include` 链，只收录当前 target 实际引用的 DTS/DTSI
+- 收集 defconfig、DTBO 模板、vendor common 配置等
+
+```bash
+cd $BSP_ROOT
+
+# 传入用户的实际编译命令（lunch 部分是关键，后面的 make/build.sh 可选）
+python3 scripts/bsp_filter_gen.py \
+  -b "source build/envsetup.sh && lunch <product>-<variant>" \
+  > .active_files.idx
+
+# 不带 -b（仅 compdb + module-info，不追踪 DTS/defconfig）
+python3 scripts/bsp_filter_gen.py > .active_files.idx
+```
+
+**多平台示例：**
+```bash
+# Rockchip
+python3 scripts/bsp_filter_gen.py -b "source build/envsetup.sh && lunch rk3568_r-userdebug"
+# Qualcomm
+python3 scripts/bsp_filter_gen.py -b "source build/envsetup.sh && lunch lahaina-userdebug"
+# MTK
+python3 scripts/bsp_filter_gen.py -b "source build/envsetup.sh && lunch k6785v1_64-userdebug"
+# 展锐
+python3 scripts/bsp_filter_gen.py -b "source build/envsetup.sh && lunch sp9863a-userdebug"
+```
+
+**验证：**
+```bash
+wc -l .active_files.idx          # 典型值：3万~10万
+grep "\.dts" .active_files.idx   # 应只含当前 target 的 DTS chain
+grep "defconfig" .active_files.idx
+```
+
+### 6.3 配置快捷命令
+
+`arg.sh` 会自动向上查找 `.active_files.idx`，在 BSP 任意子目录中均可使用。
+
+```bash
+# 在 .bashrc 或 .zshrc 中添加别名
+alias arg='$BSP_ROOT/scripts/arg.sh'
+```
+
+**使用示例：**
+```bash
+arg "drm_bridge_attach"              # 只在活跃文件中搜索
+arg -t c "dma_alloc_coherent"        # 限定 C 文件类型
+arg "compatible.*<soc>" -g "*.dts"   # DTS 中搜索兼容字符串
+```
+
+### 6.4 索引更新时机
+
+- 切换 lunch target 后需重新生成
+- 增量编译后一般无需更新（compdb 和 module-info 不变）
+- 新增/删除源文件后建议重新生成
+
+---
+
 ## 常见问题
+
+**Q: arg 搜索不到预期文件？**
+确认 `.active_files.idx` 包含该文件：`grep <文件名> .active_files.idx`。若缺少，检查该文件是否在 compile_commands.json 或 module-info.json 中。若为 DTS/config 文件，确认生成索引时使用了 `--build-cmd`。
 
 **Q: ninja 文件找不到？**
 ```bash
