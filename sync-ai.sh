@@ -58,5 +58,14 @@ if [ -f "$MASTER_MCP" ]; then
     echo "✓ MCP 配置已同步到 Antigravity, Claude Code, Cursor"
 fi
 
+echo "--- 正在同步全局规则 ---"
+
+RULES_HUB="$HUB_DIR/rules"
+mkdir -p "$HOME/.gemini"
+ln -sfn "$RULES_HUB/universal-agent-rules.md" "$HOME/.gemini/AGENTS.md"
+ln -sfn "$RULES_HUB/gemini-native-rules.md" "$HOME/.gemini/GEMINI.md"
+
+echo "✓ 全局通用规则已同步到 ~/.gemini/"
+
 echo "--- 同步完成！ ---"
 echo "提示：请重启你的 AI Agent 以应用最新配置。"
