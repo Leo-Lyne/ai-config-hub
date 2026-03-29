@@ -1,0 +1,524 @@
+---
+name: android-bsp-codenav-setup
+description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码检索环境。当用户需要：搜索代码/符号/函数定义、生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、配置 CLAUDE.md 自动调用索引工具，或用户说"帮我找函数"、"重建索引"、"更新 compdb"、"搜一下这个结构体"时，必须使用此 skill。'
+---
+
+# android-bsp-codenav-setup — Android BSP 代码导航环境全流程
+
+---
+
+## AI Agent 代码检索决策指南
+
+**所有 AI Agent（Claude Code、Opencode、Cursor、Codex、Antigravity .etc）在此 BSP 项目中搜索代码时必须遵守以下规则。**
+
+### 工具能力矩阵
+
+| 工具 | C/C++ 符号 | Java/Kotlin | 文件名 | 全文/正则 | 设备树 | 跨文件引用 |
+|------|-----------|-------------|--------|-----------|--------|-----------|
+| `global` (gtags) | ⭐⭐⭐ | ⭐⭐ | ✗ | ⭐ | ✗ | ⭐⭐⭐ |
+| `rg` (ripgrep) | ⭐⭐ | ⭐⭐ | ✗ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐ |
+| `fd` | ✗ | ✗ | ⭐⭐⭐ | ✗ | ⭐⭐ | ✗ |
+| `readtags` (ctags) | ⭐⭐ | ⭐ | ✗ | ✗ | ✗ | ✗ |
+| `locate` | ✗ | ✗ | ⭐⭐⭐ | ✗ | ✗ | ✗ |
+| OpenGrok MCP | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
+
+### 按场景选择工具（优先级从高到低）
+
+#### 查找文件
+```
+fd <名称关键词> [目录]          # 首选：快速文件名搜索
+locate <文件名>                 # 备选：全局路径搜索（数据库可能不是最新）
+```
+> 示例：找 defconfig → `fd "rk3568_defconfig" kernel/arch`
+
+#### 查找 C/C++ 函数/结构体/宏 定义
+```
+global -d <symbol>              # 首选：精确定义，支持 C/C++/Java
+global -s <partial>             # 模糊匹配符号名
+rg "^(static\s+)?(int|void|struct) <name>" --type c -l   # 备选：正则匹配函数签名
+```
+> 示例：`global -d rockchip_drm_init`
+
+#### 查找符号的所有引用
+```
+global -r <symbol>              # 首选：交叉引用，gtags 专长
+rg "<symbol>" --type c          # 备选：全文正则
+```
+
+#### 查找宏定义
+```
+rg "^#define <MACRO>" --type h  # 首选：宏在头文件中，rg 最直接
+global -d <MACRO>               # 备选
+```
+
+#### 查找 Java/Kotlin 类或方法
+```
+global -d <ClassName>           # 首选：gtags 支持 Java
+rg "class <Name>|fun <name>|void <name>" --type java --type kotlin
+```
+> 示例：`global -d ActivityThread`
+
+#### 查找设备树节点/属性
+```
+rg "<node-name>|<property>" --glob "*.dts" --glob "*.dtsi"
+fd -e dts -e dtsi "<关键词>" kernel/arch
+```
+> 示例：`rg "rockchip,rk3568" --glob "*.dtsi"`
+
+#### 查找 HAL/AIDL/HIDL 接口
+```
+fd -e aidl -e hal <关键词>      # 找接口文件
+rg "interface <Name>" --glob "*.aidl" --glob "*.hal"
+```
+
+#### 全文/正则搜索
+```
+rg "<pattern>" [目录] [--type c/java/cpp]
+rg "<pattern>" -g "*.{c,h,cpp,java}"
+```
+
+#### 模糊交互式查找
+```
+fd <关键词> | fzf               # 文件名模糊
+global -s <partial> | fzf       # 符号名模糊
+```
+
+#### 跨文件语义搜索（需 OpenGrok 容器运行）
+```
+mcp__opengrok__search_opengrok("<symbol>", "def")   # 定义
+mcp__opengrok__search_opengrok("<symbol>", "ref")   # 引用
+```
+
+### 降级策略
+
+```
+OpenGrok MCP 不可用（Docker 未运行）
+  → global (gtags) + rg
+
+gtags 数据库不存在
+  → rg + readtags
+
+所有索引都不存在
+  → rg（始终可用，无需索引）
+```
+
+### 自动行为规则
+
+- 用户提到函数名、结构体、宏、文件名 → **直接搜索，不询问确认**
+- 第一个工具结果为空 → **自动换下一个工具重试**
+- 找到多个候选 → **列出文件路径+行号，让用户确认**
+- OpenGrok 容器状态未知时 → **先用 global/rg，不要等待确认 Docker 状态**
+
+---
+
+## 各工具指令文件对照
+
+| AI 工具 | 读取的指令文件 | 说明 |
+|---------|--------------|------|
+| Claude Code | `CLAUDE.md` | 通过 `@AGENTS.md` 导入通用规则 |
+| opencode | `AGENTS.md` | 直接读取 |
+| Codex CLI | `AGENTS.md` | 直接读取 |
+| Cursor | `.cursor/rules/android-bsp.mdc` | MDC 格式，alwaysApply |
+| antigravity | `AGENTS.md` | 直接读取 |
+
+**策略**：以 `AGENTS.md` 为单一事实来源，其他文件引用或同步它。
+
+---
+
+## 前提条件
+
+使用此 skill 为android bsp项目配置代码导航工具前确认两个前提：
+1. **已有完整 Android BSP 包**（含内核、HAL、vendor 等）
+2. **已完整编译通过一次**（ninja 文件和构建产物存在）
+
+确认 BSP 根目录和编译命令（通常可从上下文获取）：
+
+| 变量 | 获取方式 | 示例 |
+|------|----------|------|
+| `$BSP_ROOT` | `echo $ANDROID_BUILD_TOP` 或 `pwd` | `/home/leo/atk-rk3568_androidR_release_v1.4_20250104` |
+| `$LUNCH_TARGET` | 从编译命令解析 | `rk3568_r-userdebug`、`lahaina-userdebug`、`k65v1_64_bsp-user` |
+
+---
+
+## Phase 1：工具安装与验证
+
+### 一键检查所有工具
+
+```bash
+for tool in fzf fd rg gtags ctags clangd locate; do
+  if command -v $tool &>/dev/null; then
+    echo "✓ $tool: $(command -v $tool)"
+  else
+    echo "✗ $tool: 未安装"
+  fi
+done
+```
+
+### 安装缺失工具（Ubuntu/Debian）
+
+```bash
+# 基础搜索工具
+sudo apt-get install -y ripgrep fd-find fzf universal-ctags
+
+# GNU Global (gtags)
+sudo apt-get install -y global
+
+# clangd（建议 14+）
+sudo apt-get install -y clangd
+
+# locate（updatedb 更新数据库）
+sudo apt-get install -y mlocate
+
+# fd 在部分系统中二进制名为 fdfind，建议创建别名
+which fdfind &>/dev/null && sudo ln -sf $(which fdfind) /usr/local/bin/fd
+```
+
+验证安装成功：
+```bash
+rg --version && fd --version && fzf --version && gtags --version && ctags --version && clangd --version
+```
+
+---
+
+## Phase 2：索引构建
+
+### 2.1 compile_commands.json（clangd 语义索引基础）
+
+`compile_commands.json` 从 ninja 构建图提取，需要先完成编译。
+
+**方法一：自动脚本（推荐，适用于已有 `gen_compdb.py` 的项目）**
+
+```bash
+cd $BSP_ROOT
+python3 gen_compdb.py
+```
+
+脚本自动查找 `out/combined-*.ninja`，适用于所有 AOSP 派生 BSP。
+
+**方法二：手动生成（通用，无需 gen_compdb.py）**
+
+```bash
+cd $BSP_ROOT
+
+# 自动检测 ninja 文件（不要写死目标名）
+NINJA_FILE=$(ls out/combined-*.ninja 2>/dev/null | head -1)
+[ -z "$NINJA_FILE" ] && NINJA_FILE="out/soong/build.ninja"
+echo "Using: $NINJA_FILE"
+
+# 提取 CC/CXX 规则名
+NINJA_BIN="./prebuilts/build-tools/linux-x86/bin/ninja"
+CC_RULES=$(awk '/^rule /{print $2}' "$NINJA_FILE" | grep -iE 'cc|cxx|clang|gcc|compile')
+
+# 生成
+$NINJA_BIN -f "$NINJA_FILE" -t compdb $CC_RULES > compile_commands.json
+du -sh compile_commands.json   # 正常为 500MB~2GB
+```
+
+**方法三：Soong 原生（部分平台）**
+
+```bash
+cd $BSP_ROOT
+source build/envsetup.sh && lunch $LUNCH_TARGET
+SOONG_GEN_COMPDB=1 SOONG_LINK_COMPDB_TO=$PWD \
+    build/soong/soong_ui.bash --make-mode nothing
+```
+
+**验证**：
+```bash
+ls -lh $BSP_ROOT/compile_commands.json
+python3 -c "import json; d=json.load(open('compile_commands.json')); print(f'OK: {len(d)} entries')"
+```
+
+---
+
+### 2.2 gtags（GNU Global 符号交叉引用）
+
+gtags 轻量快速，不依赖编译结果，适合终端中符号查找。
+
+**生成文件列表（排除构建产物，大幅提速）：**
+
+```bash
+cd $BSP_ROOT
+
+# 生成文件列表，排除 out/ .repo/ .git/ prebuilts/ 等
+find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" \
+  -o -name "*.cc" -o -name "*.java" -o -name "*.kt" \
+  -o -name "*.S" -o -name "*.s" \) \
+  ! -path "./out/*" ! -path "./.repo/*" ! -path "./.git/*" \
+  ! -path "./prebuilts/*" ! -path "*/node_modules/*" \
+  > gtags.files
+
+wc -l gtags.files   # 确认文件数量合理（典型 200k~600k）
+```
+
+**建立索引：**
+
+```bash
+gtags -v -f gtags.files 2>&1 | tee gtags.log &
+# 后台运行，典型耗时 20~60 分钟，可用 tail -f gtags.log 跟踪进度
+```
+
+**验证：**
+
+```bash
+ls -lh $BSP_ROOT/GTAGS $BSP_ROOT/GRTAGS $BSP_ROOT/GPATH
+global -d main   # 应返回 main 函数定义
+```
+
+---
+
+### 2.3 ctags（快速标签导航）
+
+```bash
+cd $BSP_ROOT
+
+# 生成 tags 文件（排除 out/）
+ctags -R --exclude=out --exclude=.repo --exclude=.git \
+  --languages=C,C++,Java,Kotlin \
+  -f tags . &
+
+# tags 文件典型大小 3~8GB，后台生成
+```
+
+**验证：**
+
+```bash
+ls -lh $BSP_ROOT/tags
+readtags -t $BSP_ROOT/tags main | head -5
+```
+
+---
+
+### 2.4 locate 数据库更新
+
+```bash
+sudo updatedb --prunepaths="/proc /sys /dev /run $BSP_ROOT/out $BSP_ROOT/.repo"
+```
+
+**验证：**
+
+```bash
+locate "rk3568_r.mk" | head -5
+```
+
+---
+
+## Phase 3：clangd 配置
+
+clangd 需要 `compile_commands.json`，同时需要过滤 Android 专有编译 flags。
+
+在 `$BSP_ROOT/.clangd` 创建配置（如不存在）：
+
+```yaml
+# .clangd
+CompileFlags:
+  Remove:
+    - -mno-global-merge
+    - -fdebug-prefix-map=*
+    - --target=*
+    - -Wa,*
+    - -fno-ipa-sra
+    - -march=armv8-2a*
+  Add:
+    - -Wno-everything
+Index:
+  Background: Build   # 后台异步建立符号索引
+```
+
+**说明**：`Remove` 列表过滤掉 Android 交叉编译专有 flags，防止 clangd crash；`Background: Build` 让 clangd 启动后自动异步建索引。
+
+在支持 LSP 的编辑器（VS Code、Neovim 等）中打开项目，clangd 自动读取 `compile_commands.json`。
+
+---
+
+## Phase 4：OpenGrok MCP 服务
+
+OpenGrok 提供 Web 全文+符号搜索，MCP 服务器让 AI 可以直接调用搜索 API。
+
+### 4.1 启动 OpenGrok Docker 容器
+
+```bash
+cd $BSP_ROOT/opengrok
+docker compose up -d
+
+# 检查容器状态
+docker compose ps
+docker compose logs --tail=20
+
+# 访问 Web UI（可选，用于人工验证）：http://localhost:8080
+```
+
+等待索引完成（首次启动会自动建立索引，可能需要数小时）：
+
+```bash
+# 跟踪索引进度
+docker compose logs -f | grep -i "index"
+```
+
+### 4.2 MCP 服务器配置
+
+项目根目录的 `.mcp.json` 已配置好 MCP 客户端集成：
+
+```json
+{
+  "mcpServers": {
+    "opengrok": {
+      "command": "<BSP_ROOT>/opengrok/.venv/bin/python3",
+      "args": ["<BSP_ROOT>/opengrok/opengrok_mcp.py"],
+      "env": { "OPENGROK_URL": "http://localhost:8080/api/v1" }
+    }
+  }
+}
+```
+
+如 `.mcp.json` 不存在，按上述模板创建（替换 `<BSP_ROOT>` 为绝对路径）。
+
+Claude Code 在项目目录启动时会自动加载 `.mcp.json` 中的 MCP 服务器，无需手动启动。
+
+### 4.3 验证 MCP 工具可用
+
+在对话中直接调用：
+```
+mcp__opengrok__search_opengrok("drm_bridge_ops", "def")
+```
+返回文件路径和行号即表示正常工作。
+
+---
+
+## Phase 5：多工具指令文件生成
+
+在 BSP 根目录创建以下三个文件，覆盖所有主流 AI 工具。
+
+---
+
+### 5.1 AGENTS.md（通用基础，所有工具的单一事实来源）
+
+在 `$BSP_ROOT/AGENTS.md` 创建（opencode / Codex CLI / antigravity 直接读此文件）：
+
+````markdown
+## Android BSP 代码检索规则
+
+这是一个 Android BSP 项目，已配置完整的代码导航工具链。
+**当需要查找、定位或搜索代码时，直接调用以下工具，不询问用户，不等待确认。**
+
+### 工具优先级（按场景）
+
+| 场景 | 首选工具 | 备选工具 |
+|------|----------|----------|
+| 查找文件 | `fd <名称> [目录]` | `locate <名称>` |
+| C/C++ 函数/结构体定义 | `global -d <symbol>` | `rg "函数签名" --type c` |
+| 符号所有引用 | `global -r <symbol>` | `rg <symbol> --type c` |
+| 宏定义 | `rg "^#define <MACRO>" --type h` | `global -d <MACRO>` |
+| Java/Kotlin 类/方法 | `global -d <ClassName>` | `rg "class <Name>" --type java` |
+| 设备树节点/属性 | `rg <pattern> --glob "*.dts" --glob "*.dtsi"` | `fd -e dts -e dtsi` |
+| HAL/AIDL 接口 | `fd -e aidl -e hal <关键词>` | `rg "interface" --glob "*.aidl"` |
+| 全文正则搜索 | `rg <pattern> [--type c/java/cpp]` | — |
+| 跨文件语义搜索 | `mcp__opengrok__search_opengrok` (需 Docker) | `global -r` |
+
+### 降级策略
+
+- OpenGrok MCP 不可用 → 自动用 `global` + `rg`
+- gtags 数据库不存在 → 用 `rg` + `readtags`
+- 第一个工具结果为空 → 自动换下一个工具，不询问
+
+### 自动行为
+
+- 用户提到函数名、结构体、宏、文件名 → 直接搜索，不询问确认
+- 找到多个候选 → 列出文件路径+行号，让用户确认
+- OpenGrok 容器状态未知 → 先用 global/rg，不等待确认 Docker 状态
+
+### 环境信息
+
+- BSP Root: 此文件所在目录
+- compile_commands.json: 项目根目录（供 clangd 使用）
+- gtags 数据库: GTAGS / GRTAGS / GPATH（项目根目录）
+- OpenGrok MCP: .mcp.json 已配置，`docker compose up -d` 启动
+````
+
+---
+
+### 5.2 CLAUDE.md（Claude Code 专用，导入 AGENTS.md）
+
+在 `$BSP_ROOT/CLAUDE.md` 创建：
+
+```markdown
+@AGENTS.md
+```
+
+Claude Code 会完整加载 `AGENTS.md` 内容。如需添加 Claude Code 专属规则，在 `@AGENTS.md` 下方追加即可。
+
+---
+
+### 5.3 .cursor/rules/android-bsp.mdc（Cursor 专用）
+
+先创建目录：
+```bash
+mkdir -p $BSP_ROOT/.cursor/rules
+```
+
+在 `$BSP_ROOT/.cursor/rules/android-bsp.mdc` 创建：
+
+````markdown
+---
+description: Android BSP 代码检索规则
+globs:
+alwaysApply: true
+---
+
+## Android BSP 代码检索规则
+
+这是一个 Android BSP 项目，已配置完整的代码导航工具链。
+当需要查找、定位或搜索代码时，直接调用以下工具，不询问用户，不等待确认。
+
+### 工具优先级（按场景）
+
+| 场景 | 首选工具 | 备选工具 |
+|------|----------|----------|
+| 查找文件 | `fd <名称> [目录]` | `locate <名称>` |
+| C/C++ 函数/结构体定义 | `global -d <symbol>` | `rg "函数签名" --type c` |
+| 符号所有引用 | `global -r <symbol>` | `rg <symbol> --type c` |
+| 宏定义 | `rg "^#define <MACRO>" --type h` | `global -d <MACRO>` |
+| Java/Kotlin 类/方法 | `global -d <ClassName>` | `rg "class <Name>" --type java` |
+| 设备树节点/属性 | `rg <pattern> --glob "*.dts" --glob "*.dtsi"` | `fd -e dts -e dtsi` |
+| HAL/AIDL 接口 | `fd -e aidl -e hal <关键词>` | `rg "interface" --glob "*.aidl"` |
+| 全文正则搜索 | `rg <pattern> [--type c/java/cpp]` | — |
+| 跨文件语义搜索 | `mcp__opengrok__search_opengrok` (需 Docker) | `global -r` |
+
+### 降级策略
+
+- OpenGrok MCP 不可用 → 自动用 `global` + `rg`
+- gtags 数据库不存在 → 用 `rg` + `readtags`
+- 第一个工具结果为空 → 自动换下一个工具，不询问
+
+### 环境信息
+
+- BSP Root: 此文件所在目录
+- compile_commands.json: 项目根目录（供 clangd 使用）
+- gtags 数据库: GTAGS / GRTAGS / GPATH（项目根目录）
+- OpenGrok MCP: .mcp.json 已配置，`docker compose up -d` 启动
+````
+
+---
+
+**三个文件创建完成后，重新启动对应工具即可生效。**
+
+---
+
+## 常见问题
+
+**Q: ninja 文件找不到？**
+```bash
+ls out/combined-*.ninja out/soong/build.ninja 2>/dev/null
+```
+若都不存在，说明还没编译，先执行编译命令。
+
+**Q: gtags 建索引太慢？**
+确认用了 `gtags -v -f gtags.files`（文件列表方式），而不是 `gtags -v`（扫描全目录）。排除 `out/` 可减少 80% 以上文件数。
+
+**Q: OpenGrok MCP 调用失败？**
+1. 检查容器：`docker compose ps`（需在 `opengrok/` 目录）
+2. 检查 API：`curl http://localhost:8080/api/v1/configuration`
+3. 降级方案：直接用 `global` 或 `rg`
+
+**Q: clangd 崩溃或无法启动？**
+确认 `.clangd` 中的 `Remove` 列表涵盖了你的平台专有 flags（通过 `head -5 compile_commands.json | grep -o '"command".*"'` 查看实际 flags）。

@@ -1,0 +1,79 @@
+{
+  "skill_name": "index-AndroidBSP",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我在做高通 SM8350 的 Android BSP，编译命令是 source build/envsetup.sh && lunch lahaina-userdebug && make -j16。刚编译完，现在想生成 compile_commands.json 给 clangd 用，怎么做？",
+      "expected_output": "给出生成 compile_commands.json 的方法，包括自动检测 ninja 文件（out/combined-lahaina.ninja），使用 gen_compdb.py 或手动 ninja compdb 命令",
+      "files": [],
+      "expectations": [
+        "提到了使用 gen_compdb.py 或等效的 ninja compdb 命令",
+        "提到了需要先完成编译/依赖编译产物（ninja 文件）",
+        "给出的方案能自动适配 lahaina 目标而不是硬编码 rk3568",
+        "给出了可以直接运行的具体命令"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "我想在 MTK Helio G96 的 Android 11 代码里找 drm_bridge_ops 这个结构体的定义在哪里，还有谁在用它，用什么工具最好？",
+      "expected_output": "推荐使用 gtags（global -d / global -r）或 ripgrep 查找结构体定义和引用，给出具体命令",
+      "files": [],
+      "expectations": [
+        "提到了 gtags（global 命令）或 ripgrep（rg）来查找结构体定义",
+        "提到了查找引用的方法（global -r 或 rg）",
+        "给出了可以直接运行的具体 shell 命令",
+        "没有将命令硬编码到 RK3568 特定路径"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "我的 Android BSP 编译命令是：source build/envsetup.sh && lunch rk3568_r-userdebug && ./build.sh -UKAp -J28。OpenGrok 容器没在跑，我要把它启动起来搜索代码，另外 gtags 数据库也要重建，怎么操作？",
+      "expected_output": "给出启动 OpenGrok docker 的命令，以及重建 gtags 数据库的步骤",
+      "files": [],
+      "expectations": [
+        "给出了 docker-compose up -d 启动命令",
+        "提到了 http://localhost:8080 或说明了访问地址",
+        "给出了 gtags 重建命令（gtags -v 或 gtags -v -f gtags.files）",
+        "说明了命令需要在项目根目录下执行"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "展锐 SC9863A Android 10 的项目，我之前 build 过了，ninja 文件在 out/combined-sp9863a_1h10.ninja。现在 compile_commands.json 过期了，怎么重新生成？要通用的方法，不要写死目标名",
+      "expected_output": "给出使用 gen_compdb.py（自动检测）或手动查找 out/combined-*.ninja 再运行 ninja compdb 的方法",
+      "files": [],
+      "expectations": [
+        "给出了 python3 gen_compdb.py 或等效的自动检测方案",
+        "没有将 ninja 文件路径写死，而是使用了 ls out/combined-*.ninja 或自动检测逻辑",
+        "给出了具体可运行的命令",
+        "提到了需要在项目根目录执行"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "刚把 Android BSP 代码下载下来，全量编译也跑完了，现在想把所有索引工具都配好（gtags/ctags/clangd/OpenGrok），让以后 Claude 能自动搜代码不用我每次指定工具，从头怎么做？",
+      "expected_output": "给出完整的从安装验证工具→生成索引→OpenGrok MCP 服务→CLAUDE.md 自动集成的全流程步骤",
+      "files": [],
+      "expectations": [
+        "提到了验证工具是否已安装（fzf/fd/rg/gtags/ctags/clangd）",
+        "给出了 compile_commands.json 生成步骤",
+        "给出了 gtags 建索引的步骤，包括用 gtags.files 排除 out/ 目录",
+        "提到了 OpenGrok docker-compose up -d 启动",
+        "给出了 CLAUDE.md 配置内容，让 Claude 默认自动使用索引工具",
+        "步骤有明确的先后顺序"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "我的 BSP 项目里 clangd 一直在报错崩溃，错误里有 'unknown argument: -mno-global-merge' 和 '--target=aarch64-linux-android'，怎么解决？",
+      "expected_output": "给出创建或修改 .clangd 配置文件，在 CompileFlags.Remove 中添加这些 Android 专有 flags 的解决方案",
+      "files": [],
+      "expectations": [
+        "给出了 .clangd 配置文件的内容",
+        "Remove 列表包含了 -mno-global-merge 和 --target=*",
+        "说明了 .clangd 文件放在项目根目录",
+        "给出了完整可用的 .clangd 文件内容而不只是片段"
+      ]
+    }
+  ]
+}
