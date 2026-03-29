@@ -1,128 +1,11 @@
 ---
 name: android-bsp-codenav-setup
-description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码检索环境。当用户需要：搜索代码/符号/函数定义、生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、配置 AGENTS.md 自动调用索引工具，或用户说"帮我找函数"、"重建索引"、"更新 compdb"、"搜一下这个结构体"时，必须使用此 skill。'
+description: '为 Android BSP 项目（RK/MTK/高通/展锐）配置代码导航环境。当用户需要：生成 compile_commands.json、重建 gtags/ctags 索引、启动 OpenGrok MCP、生成 AGENTS.md 指令文件、配置 Active Filter，或用户说"配置代码导航"、"重建索引"、"更新 compdb"时，使用此 skill。代码检索规则请使用 android-bsp-codesearch skill。'
 ---
 
-# android-bsp-codenav-setup — Android BSP 项目配置代码导航环境全流程
+# android-bsp-codenav-setup — Android BSP 项目代码导航环境搭建
 
----
-
-## AI Agent 代码检索决策指南
-
-**所有 AI Agent（Claude Code、Opencode、Cursor、Codex、Antigravity .etc）在此 BSP 项目中搜索代码时必须遵守以下规则。**
-
-### 工具能力矩阵
-
-| 工具 | C/C++ 符号 | Java/Kotlin | 文件名 | 全文/正则 | 设备树 | 跨文件引用 |
-|------|-----------|-------------|--------|-----------|--------|-----------|
-| `global` (gtags) | ⭐⭐⭐ | ⭐⭐ | ✗ | ⭐ | ✗ | ⭐⭐⭐ |
-| `rg` (ripgrep) | ⭐⭐ | ⭐⭐ | ✗ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐ |
-| `fd` | ✗ | ✗ | ⭐⭐⭐ | ✗ | ⭐⭐ | ✗ |
-| `readtags` (ctags) | ⭐⭐ | ⭐ | ✗ | ✗ | ✗ | ✗ |
-| `locate` | ✗ | ✗ | ⭐⭐⭐ | ✗ | ✗ | ✗ |
-| `arg` (Active Ripgrep) | ⭐⭐⭐ | ⭐⭐⭐ | ✗ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐ |
-| OpenGrok MCP | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
-
-### 按场景选择工具（优先级从高到低）
-
-#### 查找文件
-```
-fd <名称关键词> [目录]          # 首选：快速文件名搜索
-locate <文件名>                 # 备选：全局路径搜索（数据库可能不是最新）
-```
-> 示例：`fd "defconfig" kernel/arch` 或 `fd "<product>.mk" device/`
-
-#### 查找 C/C++ 函数/结构体/宏 定义
-```
-global -d <symbol>              # 首选：精确定义，支持 C/C++/Java
-global -s <partial>             # 模糊匹配符号名
-rg "^(static\s+)?(int|void|struct) <name>" --type c -l   # 备选：正则匹配函数签名
-```
-> 示例：`global -d drm_bridge_attach` 或 `global -d camera_provider_init`
-
-#### 查找符号的所有引用
-```
-global -r <symbol>              # 首选：交叉引用，gtags 专长
-rg "<symbol>" --type c          # 备选：全文正则
-```
-
-#### 查找宏定义
-```
-rg "^#define <MACRO>" --type h  # 首选：宏在头文件中，rg 最直接
-global -d <MACRO>               # 备选
-```
-
-#### 查找 Java/Kotlin 类或方法
-```
-global -d <ClassName>           # 首选：gtags 支持 Java
-rg "class <Name>|fun <name>|void <name>" --type java --type kotlin
-```
-> 示例：`global -d ActivityThread`
-
-#### 查找设备树节点/属性
-```
-rg "<node-name>|<property>" --glob "*.dts" --glob "*.dtsi"
-fd -e dts -e dtsi "<关键词>" kernel/arch
-```
-> 示例：`rg "compatible.*<soc>" --glob "*.dtsi"` （如 `rg "compatible.*sm8350"`, `rg "compatible.*mt6785"`）
-
-#### 查找 HAL/AIDL/HIDL 接口
-```
-fd -e aidl -e hal <关键词>      # 找接口文件
-rg "interface <Name>" --glob "*.aidl" --glob "*.hal"
-```
-
-#### 全文/正则搜索
-```
-rg "<pattern>" [目录] [--type c/java/cpp]
-rg "<pattern>" -g "*.{c,h,cpp,java}"
-```
-
-#### 模糊交互式查找
-```
-fd <关键词> | fzf               # 文件名模糊
-global -s <partial> | fzf       # 符号名模糊
-```
-
-#### 跨文件语义搜索（需 OpenGrok 容器运行）
-```
-mcp__opengrok__search_opengrok("<symbol>", "def")   # 定义
-mcp__opengrok__search_opengrok("<symbol>", "ref")   # 引用
-```
-
-### 降级策略
-
-```
-OpenGrok MCP 不可用（Docker 未运行）
-  → global (gtags) + rg
-
-gtags 数据库不存在
-  → rg + readtags
-
-所有索引都不存在
-  → rg（始终可用，无需索引）
-```
-
-### 自动行为规则
-
-- 用户提到函数名、结构体、宏、文件名 → **直接搜索，不询问确认**
-- 第一个工具结果为空 → **自动换下一个工具重试**
-- 找到多个候选 → **列出文件路径+行号，让用户确认**
-- OpenGrok 容器状态未知时 → **先用 global/rg，不要等待确认 Docker 状态**
-
----
-
-## 各工具指令文件对照
-
-| AI 工具 | 读取的指令文件 | 说明 |
-|---------|--------------|------|
-| Claude Code | `CLAUDE.md` | 通过 `@AGENTS.md` 导入通用规则 |
-| opencode | `AGENTS.md` | 直接读取 |
-| Codex CLI | `AGENTS.md` | 直接读取 |
-| Cursor | `.cursor/rules/android-bsp.mdc` | MDC 格式，alwaysApply |
-| antigravity | `AGENTS.md` | 直接读取 |
-
-**策略**：以 `AGENTS.md` 为单一事实来源，其他文件引用或同步它。
+> **注意**：本 skill 负责环境搭建（工具安装、索引构建、指令文件生成）。日常代码检索的工具选择和策略请参考 `android-bsp-codesearch` skill。
 
 ---
 
@@ -383,57 +266,25 @@ mcp__opengrok__search_opengrok("drm_bridge_ops", "def")
 
 ## Phase 5：多工具指令文件生成
 
-在 BSP 根目录创建以下三个文件，覆盖所有主流 AI 工具。
+在 BSP 根目录创建指令文件，让各 AI 工具自动遵循代码检索规则。
 
----
+**内容来源**：`android-bsp-codesearch` skill 中的检索规则，加上当前项目的环境信息。
 
-### 5.1 AGENTS.md（通用基础，所有工具的单一事实来源）
+| AI 工具 | 指令文件 | 说明 |
+|---------|---------|------|
+| Claude Code | `CLAUDE.md` | 通过 `@AGENTS.md` 导入 |
+| opencode / Codex / antigravity | `AGENTS.md` | 直接读取 |
+| Cursor | `.cursor/rules/android-bsp.mdc` | MDC 格式，alwaysApply |
 
-在 `$BSP_ROOT/AGENTS.md` 创建（opencode / Codex CLI / antigravity 直接读此文件）：
+**策略**：以 `AGENTS.md` 为单一事实来源，其他文件引用或同步它。
 
-````markdown
-## Android BSP 代码检索规则
+### 5.1 AGENTS.md
 
-这是一个 Android BSP 项目，已配置完整的代码导航工具链。
-**当需要查找、定位或搜索代码时，直接调用以下工具，不询问用户，不等待确认。**
+在 `$BSP_ROOT/AGENTS.md` 创建，内容应包含：
+- `android-bsp-codesearch` skill 中的工具优先级表、降级策略、自动行为规则
+- 当前项目的环境信息（BSP Root、compile_commands.json 路径、gtags 数据库位置、OpenGrok MCP 配置）
 
-### 工具优先级（按场景）
-
-| 场景 | 首选工具 | 备选工具 |
-|------|----------|----------|
-| 查找文件 | `fd <名称> [目录]` | `locate <名称>` |
-| C/C++ 函数/结构体定义 | `global -d <symbol>` | `rg "函数签名" --type c` |
-| 符号所有引用 | `global -r <symbol>` | `rg <symbol> --type c` |
-| 宏定义 | `rg "^#define <MACRO>" --type h` | `global -d <MACRO>` |
-| Java/Kotlin 类/方法 | `global -d <ClassName>` | `rg "class <Name>" --type java` |
-| 设备树节点/属性 | `rg <pattern> --glob "*.dts" --glob "*.dtsi"` | `fd -e dts -e dtsi` |
-| HAL/AIDL 接口 | `fd -e aidl -e hal <关键词>` | `rg "interface" --glob "*.aidl"` |
-| 全文正则搜索 | `rg <pattern> [--type c/java/cpp]` | — |
-| 跨文件语义搜索 | `mcp__opengrok__search_opengrok` (需 Docker) | `global -r` |
-
-### 降级策略
-
-- OpenGrok MCP 不可用 → 自动用 `global` + `rg`
-- gtags 数据库不存在 → 用 `rg` + `readtags`
-- 第一个工具结果为空 → 自动换下一个工具，不询问
-
-### 自动行为
-
-- 用户提到函数名、结构体、宏、文件名 → 直接搜索，不询问确认
-- 找到多个候选 → 列出文件路径+行号，让用户确认
-- OpenGrok 容器状态未知 → 先用 global/rg，不等待确认 Docker 状态
-
-### 环境信息
-
-- BSP Root: 此文件所在目录
-- compile_commands.json: 项目根目录（供 clangd 使用）
-- gtags 数据库: GTAGS / GRTAGS / GPATH（项目根目录）
-- OpenGrok MCP: .mcp.json 已配置，`docker compose up -d` 启动
-````
-
----
-
-### 5.2 CLAUDE.md（Claude Code 专用，导入 AGENTS.md）
+### 5.2 CLAUDE.md
 
 在 `$BSP_ROOT/CLAUDE.md` 创建：
 
@@ -441,60 +292,13 @@ mcp__opengrok__search_opengrok("drm_bridge_ops", "def")
 @AGENTS.md
 ```
 
-Claude Code 会完整加载 `AGENTS.md` 内容。如需添加 Claude Code 专属规则，在 `@AGENTS.md` 下方追加即可。
+### 5.3 .cursor/rules/android-bsp.mdc
 
----
-
-### 5.3 .cursor/rules/android-bsp.mdc（Cursor 专用）
-
-先创建目录：
 ```bash
 mkdir -p $BSP_ROOT/.cursor/rules
 ```
 
-在 `$BSP_ROOT/.cursor/rules/android-bsp.mdc` 创建：
-
-````markdown
----
-description: Android BSP 代码检索规则
-globs:
-alwaysApply: true
----
-
-## Android BSP 代码检索规则
-
-这是一个 Android BSP 项目，已配置完整的代码导航工具链。
-当需要查找、定位或搜索代码时，直接调用以下工具，不询问用户，不等待确认。
-
-### 工具优先级（按场景）
-
-| 场景 | 首选工具 | 备选工具 |
-|------|----------|----------|
-| 查找文件 | `fd <名称> [目录]` | `locate <名称>` |
-| C/C++ 函数/结构体定义 | `global -d <symbol>` | `rg "函数签名" --type c` |
-| 符号所有引用 | `global -r <symbol>` | `rg <symbol> --type c` |
-| 宏定义 | `rg "^#define <MACRO>" --type h` | `global -d <MACRO>` |
-| Java/Kotlin 类/方法 | `global -d <ClassName>` | `rg "class <Name>" --type java` |
-| 设备树节点/属性 | `rg <pattern> --glob "*.dts" --glob "*.dtsi"` | `fd -e dts -e dtsi` |
-| HAL/AIDL 接口 | `fd -e aidl -e hal <关键词>` | `rg "interface" --glob "*.aidl"` |
-| 全文正则搜索 | `rg <pattern> [--type c/java/cpp]` | — |
-| 跨文件语义搜索 | `mcp__opengrok__search_opengrok` (需 Docker) | `global -r` |
-
-### 降级策略
-
-- OpenGrok MCP 不可用 → 自动用 `global` + `rg`
-- gtags 数据库不存在 → 用 `rg` + `readtags`
-- 第一个工具结果为空 → 自动换下一个工具，不询问
-
-### 环境信息
-
-- BSP Root: 此文件所在目录
-- compile_commands.json: 项目根目录（供 clangd 使用）
-- gtags 数据库: GTAGS / GRTAGS / GPATH（项目根目录）
-- OpenGrok MCP: .mcp.json 已配置，`docker compose up -d` 启动
-````
-
----
+在 `$BSP_ROOT/.cursor/rules/android-bsp.mdc` 创建，frontmatter 设置 `alwaysApply: true`，正文内容与 AGENTS.md 一致。
 
 **三个文件创建完成后，重新启动对应工具即可生效。**
 
