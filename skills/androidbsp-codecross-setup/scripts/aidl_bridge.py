@@ -15,14 +15,19 @@ AIDL / HIDL 跨语言桥映射：接口声明 <-> 生成代码 <-> 实现类。
   - 编译产物（out/soong/.intermediates/）可选，用于定位生成代码
 
 Tags:
-  AIDL-IFACE    .aidl 声明 / AIDL 生成代码
+  AIDL-IFACE    .aidl 声明 / AIDL 生成代码（多 backend）
   HIDL-IFACE    .hal 声明 / HIDL 生成代码
-  BN-IMPL       服务端实现（继承 Bn*/BnHw*）
+  BN-IMPL       服务端实现（继承 Bn*/BnHw*/impl Rust trait）
   BP-CALLER     客户端引用（Bp*/BpHw*/asInterface/getService）
 
 AIDL 约定：
   - 声明：IFoo.aidl
-  - 生成：out/soong/.intermediates/**/gen/**/{IFoo, BnFoo, BpFoo}.{h,cpp,java}
+  - stable API：aidl_api/<pkg>/V<n>/<iface>.aidl（或 .../current/）
+  - 多 backend 生成目录（Android 12+）：
+      out/soong/.intermediates/**/<pkg>-V<n>-cpp-source/gen/...
+      out/soong/.intermediates/**/<pkg>-V<n>-ndk-source/gen/...
+      out/soong/.intermediates/**/<pkg>-V<n>-java-source/gen/...
+      out/soong/.intermediates/**/<pkg>-V<n>-rust-source/gen/...
   - 实现：class/struct 继承 BnFoo（服务端）
   - 客户端：引用 BpFoo 或 IFoo.Stub.asInterface
 
@@ -47,6 +52,15 @@ from _bsp_common import (
 require_version("1.0.0")
 
 
+AIDL_BACKENDS = ('cpp', 'ndk', 'java', 'rust')
+BACKEND_EXT_GLOBS = {
+    'cpp':  ['*.h', '*.cpp'],
+    'ndk':  ['*.h', '*.cpp'],
+    'java': ['*.java'],
+    'rust': ['*.rs'],
+}
+
+
 def fd_find(pattern: str, root: Path, extra_args=None, timeout: int = 60):
     args = ['fd', '--type', 'f', pattern, str(root)]
     if extra_args:
@@ -66,40 +80,85 @@ def detect_type(iface_name: str, root: Path, timeout: int) -> str:
     return 'aidl'  # 默认
 
 
-def trace_aidl(e: Emitter, iface: str, root: Path, timeout: int):
-    # 1. 声明 .aidl
+def enumerate_aidl_versions(iface: str, root: Path, timeout: int):
+    """遍历 aidl_api/<pkg>/V<n>/ 下的 stable API 快照。
+    返回 [(version, iface_path)]。"""
+    results = []
     decls = fd_find(rf'^{re.escape(iface)}\.aidl$', root, timeout=timeout)
     for d in decls:
+        m = re.search(r'/aidl_api/[^/]+/(V\d+|current)/', d)
+        if m:
+            results.append((m.group(1), d))
+    return results
+
+
+def find_backend_gen(iface: str, root: Path, timeout: int):
+    """在 out/soong/.intermediates/ 下定位多 backend 生成代码。
+    返回 [(backend, version, file_path)]。"""
+    results = []
+    out_dir = root / 'out'
+    if not out_dir.exists():
+        return results
+
+    seen = set()
+    for backend in AIDL_BACKENDS:
+        # 文件名按 backend 约定：I<Name>.{h,cpp,java,rs}
+        # 先收集可能的生成文件，再按目录名含 "-<backend>-source/" 过滤
+        for ext in BACKEND_EXT_GLOBS[backend]:
+            base = iface
+            if ext == '*.rs':
+                # AIDL rust backend 惯例：文件名多为 lib.rs / mangled；
+                # 这里放宽到接口名片段匹配
+                name_pat = rf'{re.escape(iface.lstrip("I"))}'
+            else:
+                name_pat = rf'^{re.escape(base)}\.'
+            hits = fd_find(name_pat, out_dir,
+                           extra_args=['-e', ext.lstrip('*.')],
+                           timeout=timeout)
+            for fpath in hits:
+                if f'-{backend}-source' not in fpath:
+                    continue
+                m = re.search(rf'-(V\d+)-{backend}-source/', fpath)
+                version = m.group(1) if m else ''
+                key = (backend, version, fpath)
+                if key not in seen:
+                    seen.add(key)
+                    results.append(key)
+    return results
+
+
+def trace_aidl(e: Emitter, iface: str, root: Path, timeout: int):
+    # 1. 声明 .aidl（含 stable API 快照）
+    decls = fd_find(rf'^{re.escape(iface)}\.aidl$', root, timeout=timeout)
+    stable_versions = set()
+    for d in decls:
+        info = {'kind': 'decl'}
+        m = re.search(r'/aidl_api/[^/]+/(V\d+|current)/', d)
+        if m:
+            info['stable'] = 'true'
+            info['version'] = m.group(1)
+            stable_versions.add(m.group(1))
         e.emit(Finding(tag='AIDL-IFACE', file=d, line=0,
-                       snippet=f'{iface}.aidl',
-                       info={'kind': 'decl'}),
+                       snippet=f'{iface}.aidl', info=info),
                confidence='high', source='static-fd', tags=['aidl', 'decl'])
 
-    # 2. 生成代码（编译产物，可能不存在）
-    out_dir = root / 'out'
-    if out_dir.exists():
-        gen_java = fd_find(rf'^{re.escape(iface)}\.java$', out_dir, timeout=timeout)
-        gen_cpp = fd_find(rf'^{re.escape(iface)}\.(cpp|cc|h)$', out_dir,
-                          timeout=timeout)
-        for f in gen_java:
-            if '.intermediates' in f:
-                e.emit(Finding(tag='AIDL-IFACE', file=f, line=0, snippet='',
-                               info={'kind': 'gen', 'lang': 'java'}),
-                       confidence='high', source='static-fs',
-                       tags=['aidl', 'gen', 'java'])
-        for f in gen_cpp:
-            if '.intermediates' in f:
-                lang = 'header' if f.endswith('.h') else 'cpp'
-                e.emit(Finding(tag='AIDL-IFACE', file=f, line=0, snippet='',
-                               info={'kind': 'gen', 'lang': lang}),
-                       confidence='high', source='static-fs',
-                       tags=['aidl', 'gen', 'cpp'])
+    if stable_versions:
+        vstr = ', '.join(sorted(stable_versions))
+        print(f'# AIDL stable versions for {iface}: {vstr}', file=sys.stderr)
+
+    # 2. 多 backend 生成代码（cpp / ndk / java / rust）
+    for backend, version, fpath in find_backend_gen(iface, root, timeout):
+        e.emit(Finding(tag='AIDL-IFACE', file=fpath, line=0, snippet='',
+                       info={'kind': 'gen', 'backend': backend,
+                             'version': version}),
+               confidence='high', source='static-fs',
+               tags=['aidl', 'gen', backend])
 
     # 3. 实现类：继承 Bn<name-without-I> 或实现 IFoo.Stub
     base = iface[1:] if iface.startswith('I') else iface
     bn_name = f'Bn{base}'
 
-    # C++ 侧实现
+    # C++ 侧实现（cpp/ndk backend 共用 Bn 基类名）
     for fpath, line, snip in rg_find(
             rf'class\s+\w+\s*:\s*public\s+{re.escape(bn_name)}\b',
             globs=['*.h', '*.cpp', '*.cc'], root=root, timeout=timeout):
@@ -131,6 +190,17 @@ def trace_aidl(e: Emitter, iface: str, root: Path, timeout: int):
                        info={'lang': 'kotlin', 'base': f'{iface}.Stub'}),
                confidence='high', source='static-rg',
                tags=['aidl', 'impl', 'kotlin'])
+
+    # Rust 侧实现（AIDL rust backend）：impl I<Name>Async::... for / impl I<Name>:: for
+    for fpath, line, snip in rg_find(
+            rf'impl\s+{re.escape(iface)}\b',
+            globs=['*.rs'], root=root, timeout=timeout):
+        if '/out/' in fpath:
+            continue
+        e.emit(Finding(tag='BN-IMPL', file=fpath, line=line, snippet=snip,
+                       info={'lang': 'rust', 'base': iface}),
+               confidence='med', source='static-rg',
+               tags=['aidl', 'impl', 'rust'])
 
     # 4. 客户端引用：Bp<base> 或 IFoo.Stub.asInterface
     bp_name = f'Bp{base}'
