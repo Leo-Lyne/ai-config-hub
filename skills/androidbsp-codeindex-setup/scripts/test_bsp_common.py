@@ -1,15 +1,12 @@
 """Tests for _bsp_common.py. Run: pytest test_bsp_common.py -v"""
 import json
 import os
-import subprocess
 import sys
-import tempfile
-from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
-import _bsp_common as c
+import _bsp_common as c  # type: ignore[import-not-found] # noqa: E402
 
 
 def test_version_is_packaging_version():

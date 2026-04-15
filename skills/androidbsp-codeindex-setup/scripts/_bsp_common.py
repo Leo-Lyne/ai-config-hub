@@ -6,10 +6,8 @@ All other scripts in the same dir import from here.
 from __future__ import annotations
 import argparse
 import json
-import os
 import subprocess
 import sys
-import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -199,7 +197,7 @@ class Emitter:
             self._fp = open(codenav / "events.jsonl", "a", buffering=1)
         return self
 
-    def __exit__(self, *a):
+    def __exit__(self, *_):
         if self._fp:
             self._fp.close()
 
