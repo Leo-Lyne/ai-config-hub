@@ -18,17 +18,26 @@ JNI 跨语言桥映射：Java/Kotlin native 方法 <-> C/C++ JNI 函数。
   - gtags 索引（GTAGS/GRTAGS/GPATH），用于 C 侧反查
   - rg，用于 Java/Kotlin 侧扫描
 
-输出格式（TSV）：
-  <tag>\t<file>:<line>\t<snippet>
-  tag ∈ { JAVA, KOTLIN, C }
+Tags:
+  NATIVE-DECL       Java/Kotlin native 方法声明
+  JNI-IMPL          C/C++ 侧 Java_* 实现
+  REGISTER-NATIVES  RegisterNatives / JNINativeMethod 动态注册
 """
 
-import argparse
+from __future__ import annotations
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).parent))
+from _bsp_common import (
+    Emitter, Finding, make_parser, require_version, run_cmd,
+    rg_find, gtags_lookup,
+)
+
+require_version("1.0.0")
+
 
 # JNI 名称 mangling 规则（JNI Spec 13.2）
 # . -> _   (包分隔)
@@ -68,8 +77,7 @@ def demangle_jni(sym: str):
     # 移除签名后缀（__xxx）
     if '__' in body:
         body = body.split('__', 1)[0]
-    # 还原 _1 -> _
-    # 做字符级还原，避免贪婪替换干扰
+    # 还原 _1 -> _ 等
     out = []
     i = 0
     while i < len(body):
@@ -89,10 +97,6 @@ def demangle_jni(sym: str):
                     pass
         out.append(body[i]); i += 1
     restored = ''.join(out)
-    # 最后一个未编码的 _ 之前是 FQCN（dots），之后是 method
-    # 实际 mangling 把 . 也编码为 _，所以只能按"未编码 _"启发式切分：
-    # 把末尾从右边第一个 _（不是来自 _1/_2/_3 之类的）切开即可。
-    # 简化处理：默认最后一个 _ 即分隔符；返回多候选供调用方挨个试。
     candidates = []
     for idx in range(len(restored) - 1, -1, -1):
         if restored[idx] == '_':
@@ -103,203 +107,207 @@ def demangle_jni(sym: str):
     return candidates
 
 
-# 扫描 Java 文件找 native 方法；返回 [(fqcn, method, file, line, snippet)]
-def scan_java(bsp_root: Path):
-    results = []
-    # 用 rg 列出包含 'native' 的 Java 文件行，再自己定位类/包
-    try:
-        out = subprocess.run(
-            ['rg', '-n', '--no-heading', '-t', 'java', r'\bnative\s+[\w\[\]<>,\s]+\s+\w+\s*\(', str(bsp_root)],
-            capture_output=True, text=True, timeout=600,
-        )
-    except FileNotFoundError:
-        print('rg not found', file=sys.stderr); return results
-    for ln in out.stdout.splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', ln)
-        if not m: continue
-        fpath, line_no, snippet = m.group(1), int(m.group(2)), m.group(3)
-        mm = re.search(r'\bnative\s+[\w\[\]<>,\s?]+?\s+(\w+)\s*\(', snippet)
-        if not mm: continue
-        method = mm.group(1)
-        fqcn = resolve_java_fqcn(Path(fpath))
-        if fqcn:
-            results.append(('JAVA', fqcn, method, fpath, line_no, snippet.strip()))
-    return results
-
-
-def scan_kotlin(bsp_root: Path):
-    results = []
-    try:
-        out = subprocess.run(
-            ['rg', '-n', '--no-heading', '-g', '*.kt', r'\bexternal\s+fun\s+\w+\s*\(', str(bsp_root)],
-            capture_output=True, text=True, timeout=600,
-        )
-    except FileNotFoundError:
-        return results
-    for ln in out.stdout.splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', ln)
-        if not m: continue
-        fpath, line_no, snippet = m.group(1), int(m.group(2)), m.group(3)
-        mm = re.search(r'\bexternal\s+fun\s+(\w+)\s*\(', snippet)
-        if not mm: continue
-        method = mm.group(1)
-        fqcn = resolve_kotlin_fqcn(Path(fpath))
-        if fqcn:
-            results.append(('KOTLIN', fqcn, method, fpath, line_no, snippet.strip()))
-    return results
-
-
-def resolve_java_fqcn(path: Path):
+def resolve_java_fqcn(path: Path) -> Optional[str]:
     try:
         text = path.read_text(errors='ignore')
-    except Exception:
+    except OSError:
         return None
     pkg = re.search(r'^\s*package\s+([\w.]+)\s*;', text, re.M)
     cls = re.search(r'\b(?:class|interface|enum)\s+(\w+)', text)
-    if not (pkg and cls): return None
+    if not (pkg and cls):
+        return None
     return f'{pkg.group(1)}.{cls.group(1)}'
 
 
-def resolve_kotlin_fqcn(path: Path):
+def resolve_kotlin_fqcn(path: Path) -> Optional[str]:
     try:
         text = path.read_text(errors='ignore')
-    except Exception:
+    except OSError:
         return None
     pkg = re.search(r'^\s*package\s+([\w.]+)', text, re.M)
     cls = re.search(r'\b(?:class|object|interface)\s+(\w+)', text)
-    if not (pkg and cls): return None
+    if not (pkg and cls):
+        return None
     return f'{pkg.group(1)}.{cls.group(1)}'
 
 
-def gtags_lookup(sym: str):
-    """用 global -d 找 C 符号定义；返回 [(file, line, snippet)]"""
-    try:
-        out = subprocess.run(
-            ['global', '-x', '-d', sym],
-            capture_output=True, text=True, timeout=30,
-        )
-    except FileNotFoundError:
-        return []
+# 扫描 Java/Kotlin 文件找 native 方法
+def scan_java(root: Path, timeout: int):
     results = []
-    # global -x 输出格式: <symbol> <line> <file> <snippet>
-    for ln in out.stdout.splitlines():
-        parts = ln.split(None, 3)
-        if len(parts) >= 4:
-            _sym, line_no, fpath, snippet = parts
-            results.append((fpath, int(line_no), snippet))
+    hits = rg_find(
+        r'\bnative\s+[\w\[\]<>,\s]+\s+\w+\s*\(',
+        globs=['*.java'], root=root, timeout=timeout,
+    )
+    for fpath, line_no, snippet in hits:
+        mm = re.search(r'\bnative\s+[\w\[\]<>,\s?]+?\s+(\w+)\s*\(', snippet)
+        if not mm:
+            continue
+        method = mm.group(1)
+        fqcn = resolve_java_fqcn(Path(fpath))
+        if fqcn:
+            results.append(('java', fqcn, method, fpath, line_no, snippet))
     return results
 
 
-def from_java(fqcn: str, method: str):
+def scan_kotlin(root: Path, timeout: int):
+    results = []
+    hits = rg_find(
+        r'\bexternal\s+fun\s+\w+\s*\(',
+        globs=['*.kt'], root=root, timeout=timeout,
+    )
+    for fpath, line_no, snippet in hits:
+        mm = re.search(r'\bexternal\s+fun\s+(\w+)\s*\(', snippet)
+        if not mm:
+            continue
+        method = mm.group(1)
+        fqcn = resolve_kotlin_fqcn(Path(fpath))
+        if fqcn:
+            results.append(('kotlin', fqcn, method, fpath, line_no, snippet))
+    return results
+
+
+def find_register_natives(e: Emitter, sym: str, root: Optional[Path], timeout: int):
+    """查 RegisterNatives / JNINativeMethod 数组中的动态注册。"""
+    # 字符串字面量形式 "methodName"
+    method_part = sym.rsplit('_', 1)[-1] if '_' in sym else sym
+    if not method_part:
+        return
+    hits = rg_find(
+        rf'"{re.escape(method_part)}"\s*,',
+        globs=['*.cpp', '*.cc', '*.c', '*.h'], root=root, timeout=timeout,
+    )
+    for fpath, line_no, snippet in hits:
+        # 启发式过滤：snippet 中同时出现 ( 及 函数指针符号，或在 JNINativeMethod 上下文内
+        if 'JNINativeMethod' in snippet or re.search(r',\s*"[^"]*"\s*,\s*\w', snippet):
+            e.emit(Finding(tag='REGISTER-NATIVES', file=fpath, line=line_no,
+                           snippet=snippet,
+                           info={'method': method_part}),
+                   confidence='med', source='static-rg', tags=['jni', 'register'])
+
+
+def from_java(e: Emitter, fqcn: str, method: str, root: Optional[Path],
+              timeout: int):
     sym = mangle_jni(fqcn, method)
-    print(f'# Mangled C symbol: {sym}')
-    # Java 端
-    # 通过 FQCN 反推文件路径提示；这里直接用 global 或 rg 找 native 声明
-    try:
-        cls_name = fqcn.rsplit('.', 1)[-1]
-        res = subprocess.run(
-            ['rg', '-n', '--no-heading',
-             rf'\b(native|external)\s+.*\b{re.escape(method)}\s*\(',
-             '-g', f'**/{cls_name}.java', '-g', f'**/{cls_name}.kt'],
-            capture_output=True, text=True, timeout=30,
-        )
-        for ln in res.stdout.splitlines():
-            m = re.match(r'^([^:]+):(\d+):(.*)$', ln)
-            if m:
-                tag = 'KOTLIN' if m.group(1).endswith('.kt') else 'JAVA'
-                print(f'{tag}\t{m.group(1)}:{m.group(2)}\t{m.group(3).strip()}')
-    except FileNotFoundError:
-        print('rg not found', file=sys.stderr)
-    # C 端（精确 + 带签名变体）
-    for entry in gtags_lookup(sym):
-        fpath, line_no, snippet = entry
-        print(f'C\t{fpath}:{line_no}\t{snippet}')
-    # 尝试匹配带签名的变体：Java_FQCN_method__...
-    try:
-        res = subprocess.run(
-            ['global', '-x', '-c', sym],  # -c 前缀补全
-            capture_output=True, text=True, timeout=30,
-        )
-        # -c 只返回符号列表，没有位置；对每个变体再跑 -d
+    print(f'# Mangled C symbol: {sym}', file=sys.stderr)
+
+    # Java/Kotlin 声明
+    cls_name = fqcn.rsplit('.', 1)[-1]
+    hits = rg_find(
+        rf'\b(native|external)\s+.*\b{re.escape(method)}\s*\(',
+        globs=[f'**/{cls_name}.java', f'**/{cls_name}.kt'],
+        root=root, timeout=timeout,
+    )
+    for fpath, line_no, snippet in hits:
+        lang = 'kotlin' if fpath.endswith('.kt') else 'java'
+        e.emit(Finding(tag='NATIVE-DECL', file=fpath, line=line_no,
+                       snippet=snippet,
+                       info={'lang': lang, 'fqcn': fqcn, 'method': method}),
+               confidence='high', source='static-rg', tags=['jni', 'decl'])
+
+    # C 侧精确 Java_*
+    for fpath, line_no, snippet in gtags_lookup(sym, kind='def'):
+        e.emit(Finding(tag='JNI-IMPL', file=fpath, line=line_no, snippet=snippet,
+                       info={'symbol': sym}),
+               confidence='high', source='gtags', tags=['jni', 'impl'])
+
+    # 带签名后缀变体 Java_*__xxx
+    r = run_cmd(['global', '-c', sym], timeout=timeout)
+    if r.returncode in (0, 1):
         seen = {sym}
-        for variant in res.stdout.splitlines():
+        for variant in r.stdout.splitlines():
             v = variant.strip()
             if v and v != sym and v not in seen:
                 seen.add(v)
-                for fpath, line_no, snippet in gtags_lookup(v):
-                    print(f'C\t{fpath}:{line_no}\t{snippet}\t# variant {v}')
-    except Exception:
-        pass
+                for fpath, line_no, snippet in gtags_lookup(v, kind='def'):
+                    e.emit(Finding(tag='JNI-IMPL', file=fpath, line=line_no,
+                                   snippet=snippet,
+                                   info={'symbol': v, 'variant': 'signed'}),
+                           confidence='med', source='gtags',
+                           tags=['jni', 'impl', 'variant'])
+
+    # 动态注册
+    find_register_natives(e, sym, root, timeout)
 
 
-def from_c(sym: str):
+def from_c(e: Emitter, sym: str, root: Optional[Path], timeout: int):
+    # C 端定义
+    for fpath, line_no, snippet in gtags_lookup(sym, kind='def'):
+        e.emit(Finding(tag='JNI-IMPL', file=fpath, line=line_no, snippet=snippet,
+                       info={'symbol': sym}),
+               confidence='high', source='gtags', tags=['jni', 'impl'])
+
+    # 动态注册（去掉 Java_ 前缀也可能是纯名字）
+    find_register_natives(e, sym, root, timeout)
+
+    # demangle 候选 -> Java/Kotlin 声明
     cands = demangle_jni(sym) or []
-    for fpath, line_no, snippet in gtags_lookup(sym):
-        print(f'C\t{fpath}:{line_no}\t{snippet}')
-    print(f'# Candidates (FQCN, method):')
     for fqcn, method in cands[:5]:
-        print(f'#   {fqcn}\t{method}')
-        # 尝试定位 Java/Kotlin 声明
         cls_name = fqcn.rsplit('.', 1)[-1] if '.' in fqcn else fqcn
-        try:
-            res = subprocess.run(
-                ['rg', '-n', '--no-heading',
-                 rf'\b(native|external)\s+.*\b{re.escape(method)}\s*\(',
-                 '-g', f'**/{cls_name}.java', '-g', f'**/{cls_name}.kt'],
-                capture_output=True, text=True, timeout=30,
-            )
-            for ln in res.stdout.splitlines():
-                m = re.match(r'^([^:]+):(\d+):(.*)$', ln)
-                if m:
-                    tag = 'KOTLIN' if m.group(1).endswith('.kt') else 'JAVA'
-                    print(f'{tag}\t{m.group(1)}:{m.group(2)}\t{m.group(3).strip()}')
-        except FileNotFoundError:
-            pass
+        hits = rg_find(
+            rf'\b(native|external)\s+.*\b{re.escape(method)}\s*\(',
+            globs=[f'**/{cls_name}.java', f'**/{cls_name}.kt'],
+            root=root, timeout=timeout,
+        )
+        for fpath, line_no, snippet in hits:
+            lang = 'kotlin' if fpath.endswith('.kt') else 'java'
+            e.emit(Finding(tag='NATIVE-DECL', file=fpath, line=line_no,
+                           snippet=snippet,
+                           info={'lang': lang, 'fqcn': fqcn,
+                                 'method': method, 'via': 'demangle'}),
+                   confidence='med', source='static-rg',
+                   tags=['jni', 'decl', 'demangle'])
 
 
-def do_scan(bsp_root: Path, out_path: Optional[Path] = None):
-    entries = scan_java(bsp_root) + scan_kotlin(bsp_root)
+def do_scan(e: Emitter, root: Path, out_path: Optional[Path], timeout: int):
+    entries = scan_java(root, timeout) + scan_kotlin(root, timeout)
     lines = []
-    for tag, fqcn, method, fpath, line_no, snippet in entries:
+    for lang, fqcn, method, fpath, line_no, snippet in entries:
         mangled = mangle_jni(fqcn, method)
-        # 反查 C
-        c_hits = gtags_lookup(mangled)
+        # emit NATIVE-DECL
+        e.emit(Finding(tag='NATIVE-DECL', file=fpath, line=line_no,
+                       snippet=snippet,
+                       info={'lang': lang, 'fqcn': fqcn, 'method': method,
+                             'mangled': mangled}),
+               confidence='high', source='static-rg', tags=['jni', 'decl'])
+        c_hits = gtags_lookup(mangled, kind='def')
         if c_hits:
             for cf, cl, cs in c_hits:
-                lines.append(f'{tag}\t{fpath}:{line_no}\t{fqcn}.{method}\tC\t{cf}:{cl}\t{mangled}')
+                e.emit(Finding(tag='JNI-IMPL', file=cf, line=cl, snippet=cs,
+                               info={'symbol': mangled, 'fqcn': fqcn,
+                                     'method': method}),
+                       confidence='high', source='gtags', tags=['jni', 'impl'])
+                lines.append(f'{lang}\t{fpath}:{line_no}\t{fqcn}.{method}\tC\t{cf}:{cl}\t{mangled}')
         else:
-            lines.append(f'{tag}\t{fpath}:{line_no}\t{fqcn}.{method}\tC\t(not found)\t{mangled}')
-    output = '\n'.join(lines)
+            lines.append(f'{lang}\t{fpath}:{line_no}\t{fqcn}.{method}\tC\t(not found)\t{mangled}')
     if out_path:
-        out_path.write_text(output + '\n')
-        print(f'Wrote {len(lines)} entries to {out_path}', file=sys.stderr)
-    else:
-        print(output)
+        out_path.write_text('\n'.join(lines) + '\n')
+        print(f'# Wrote {len(lines)} entries to {out_path}', file=sys.stderr)
 
 
 def main():
-    ap = argparse.ArgumentParser(description='JNI 跨界桥映射')
-    ap.add_argument('--from-java', nargs=2, metavar=('FQCN', 'METHOD'),
-                    help='从 Java/Kotlin native 方法找 C 实现')
-    ap.add_argument('--from-c', metavar='SYMBOL',
-                    help='从 Java_*_*_* C 符号找 Java/Kotlin 声明')
-    ap.add_argument('--scan', action='store_true',
-                    help='全量扫描，产出索引')
-    ap.add_argument('--out', type=Path, default=None,
-                    help='--scan 的输出文件；不指定则写 stdout')
-    ap.add_argument('--root', type=Path, default=Path.cwd(),
-                    help='BSP 根目录（默认当前目录）')
-    args = ap.parse_args()
+    p = make_parser('JNI 跨界桥映射：Java/Kotlin native <-> C Java_*')
+    p.add_argument('--from-java', nargs=2, metavar=('FQCN', 'METHOD'),
+                   help='从 Java/Kotlin native 方法找 C 实现')
+    p.add_argument('--from-c', metavar='SYMBOL',
+                   help='从 Java_*_*_* C 符号找 Java/Kotlin 声明')
+    p.add_argument('--scan', action='store_true',
+                   help='全量扫描，产出索引')
+    p.add_argument('--out', type=Path, default=None,
+                   help='--scan 的索引文件（TSV），不指定则不额外写')
+    args = p.parse_args()
 
-    if args.from_java:
-        from_java(*args.from_java)
-    elif args.from_c:
-        from_c(args.from_c)
-    elif args.scan:
-        do_scan(args.root, args.out)
-    else:
-        ap.print_help()
+    if not (args.from_java or args.from_c or args.scan):
+        p.print_help()
         sys.exit(1)
+
+    with Emitter(args, Path(__file__).name) as e:
+        root = Path(args.root) if args.root else (e.bsp_root or Path.cwd())
+        if args.from_java:
+            from_java(e, args.from_java[0], args.from_java[1], root, args.timeout)
+        elif args.from_c:
+            from_c(e, args.from_c, root, args.timeout)
+        elif args.scan:
+            do_scan(e, root, args.out, args.timeout)
 
 
 if __name__ == '__main__':
