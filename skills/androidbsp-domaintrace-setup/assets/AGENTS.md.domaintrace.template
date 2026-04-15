@@ -1,5 +1,5 @@
 
-<!-- BEGIN: androidbsp-domaintrace-setup -->
+<!-- BEGIN: androidbsp-domaintrace-setup v=1 -->
 ## 领域追踪（DT / sysfs / Binder / SELinux / 子系统资源 / Property / Build / init.rc / Kconfig / Firmware / Netlink / V4L2）
 
 本段由 `androidbsp-domaintrace-setup` skill 部署。

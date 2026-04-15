@@ -48,25 +48,28 @@ args:
 
 ## 前置要求
 
-**必须先跑过 `androidbsp-codeindex-setup` 并把索引使用规则注入 AGENTS.md。** 本 skill 产出的脚本内部依赖 `rg`——由索引 skill 负责部署与验证。
+**必须先跑过 `androidbsp-codeindex-setup`。** 本 skill 产出的脚本内部依赖 `rg`、`compile_commands.json`、`GTAGS`，以及公共库 `_bsp_common.py`——全部由索引 skill 负责部署与验证。
 
-**唯一判据**：项目根 `AGENTS.md` 存在且包含 `androidbsp-codeindex-setup` 字样。
+**判据**：工件齐全 + 公共库版本兼容。
 
 ```bash
 cd $BSP_ROOT
-grep -q "androidbsp-codeindex-setup" AGENTS.md 2>/dev/null || {
-  cat <<'EOF'
-❌ 前置要求未满足：未检测到 androidbsp-codeindex-setup 的部署痕迹。
-
-本 skill 依赖索引 skill 产出的 rg 等环境，
-以及 AGENTS.md 中已注入的索引使用规则。请先跑：
-
+[ -f .codenav/scripts/_bsp_common.py ] \
+  && [ -f compile_commands.json ] \
+  && [ -f GTAGS ] \
+  || { cat <<'EOF'
+❌ 前置要求未满足：codeindex-setup 未完成部署。
+缺少以下任一工件：.codenav/scripts/_bsp_common.py、compile_commands.json、GTAGS。
+请先跑：
   /codeindex setup
-
-确认项目根 AGENTS.md 里存在 "androidbsp-codeindex-setup" 段落后再回来跑 setup。
 EOF
   exit 1
 }
+
+# 验证公共库版本兼容
+python3 -c "import sys; sys.path.insert(0,'.codenav/scripts'); \
+  import _bsp_common as c; c.require_version('1.0.0')" \
+  || { echo "FAIL: _bsp_common 版本过旧，请重跑 /codeindex setup 升级"; exit 1; }
 ```
 
 不满足就停。不要自作主张去装工具——那是索引 skill 的职责。
@@ -79,45 +82,45 @@ EOF
 
 ```bash
 cd $BSP_ROOT
-mkdir -p scripts
+mkdir -p .codenav/scripts
 
 # 原始 4 个追踪脚本
-cp $SKILL_DIR/scripts/dt_bind.py          scripts/
-cp $SKILL_DIR/scripts/sysfs_attr.py       scripts/
-cp $SKILL_DIR/scripts/binder_svc.py       scripts/
-cp $SKILL_DIR/scripts/selinux_trace.py    scripts/
+cp $SKILL_DIR/scripts/dt_bind.py          .codenav/scripts/
+cp $SKILL_DIR/scripts/sysfs_attr.py       .codenav/scripts/
+cp $SKILL_DIR/scripts/binder_svc.py       .codenav/scripts/
+cp $SKILL_DIR/scripts/selinux_trace.py    .codenav/scripts/
 
 # 新增 8 个追踪脚本
-cp $SKILL_DIR/scripts/subsys_trace.py     scripts/   # clock/regulator/GPIO/IRQ/power-domain
-cp $SKILL_DIR/scripts/prop_trace.py       scripts/   # Android Property 系统
-cp $SKILL_DIR/scripts/build_trace.py      scripts/   # Android.bp/mk + VNDK
-cp $SKILL_DIR/scripts/initrc_trace.py     scripts/   # init.rc trigger 链 + USB gadget
-cp $SKILL_DIR/scripts/kconfig_trace.py    scripts/   # Kconfig ↔ 代码
-cp $SKILL_DIR/scripts/firmware_trace.py   scripts/   # firmware 加载 + kmod 自动加载
-cp $SKILL_DIR/scripts/netlink_trace.py    scripts/   # Netlink family
-cp $SKILL_DIR/scripts/media_topo.py       scripts/   # V4L2 静态拓扑
+cp $SKILL_DIR/scripts/subsys_trace.py     .codenav/scripts/   # clock/regulator/GPIO/IRQ/power-domain
+cp $SKILL_DIR/scripts/prop_trace.py       .codenav/scripts/   # Android Property 系统
+cp $SKILL_DIR/scripts/build_trace.py      .codenav/scripts/   # Android.bp/mk + VNDK
+cp $SKILL_DIR/scripts/initrc_trace.py     .codenav/scripts/   # init.rc trigger 链 + USB gadget
+cp $SKILL_DIR/scripts/kconfig_trace.py    .codenav/scripts/   # Kconfig ↔ 代码
+cp $SKILL_DIR/scripts/firmware_trace.py   .codenav/scripts/   # firmware 加载 + kmod 自动加载
+cp $SKILL_DIR/scripts/netlink_trace.py    .codenav/scripts/   # Netlink family
+cp $SKILL_DIR/scripts/media_topo.py       .codenav/scripts/   # V4L2 静态拓扑
+
+# 新增 2 个追踪脚本（bootcfg / APEX）
+cp $SKILL_DIR/scripts/bootcfg_trace.py    .codenav/scripts/   # bootconfig / cmdline 参数 ↔ 读取点
+cp $SKILL_DIR/scripts/apex_locate.py      .codenav/scripts/   # APEX 模块定位与 manifest 追踪
 
 # 统一入口
-cp $SKILL_DIR/scripts/domain_find.py      scripts/
+cp $SKILL_DIR/scripts/domain_find.py      .codenav/scripts/
 
-chmod +x scripts/*.py
+chmod +x .codenav/scripts/*.py
 ```
 
-### 2. 注入 AGENTS.md 使用规则（模板追加）
+### 2. 注入 AGENTS.md 使用规则（标记块幂等注入）
 
-把 `assets/AGENTS.md.domaintrace.template` 追加到项目根 `AGENTS.md` 末尾。模板首尾带
-`<!-- BEGIN/END: androidbsp-domaintrace-setup -->` 标记，用于幂等——已注入就跳过。
+调用 codeindex 部署的 `_inject_block.sh`（基于模板首行 `v=N` 版本标记做幂等/升级判定）：
 
 ```bash
 cd $BSP_ROOT
-MARKER="BEGIN: androidbsp-domaintrace-setup"
-if grep -qF "$MARKER" AGENTS.md; then
-  echo "AGENTS.md 已注入过 domaintrace 段落，跳过。要强制重注入，手工删除 BEGIN…END 之间的块再重跑。"
-else
-  cat $SKILL_DIR/assets/AGENTS.md.domaintrace.template >> AGENTS.md
-  echo "domaintrace 段落已注入 AGENTS.md"
-fi
+.codenav/scripts/_inject_block.sh androidbsp-domaintrace-setup \
+  $SKILL_DIR/assets/AGENTS.md.domaintrace.template AGENTS.md
 ```
+
+同版本已注入 → 跳过；模板升 `v=N` → 替换 BEGIN…END 之间的块；未注入过 → 追加。
 
 ### 3. 冒烟验证
 
@@ -127,8 +130,9 @@ cd $BSP_ROOT
 # 脚本可执行
 for s in domain_find dt_bind sysfs_attr binder_svc selinux_trace \
          subsys_trace prop_trace build_trace initrc_trace \
-         kconfig_trace firmware_trace netlink_trace media_topo; do
-  python3 scripts/$s.py --help >/dev/null && echo "$s OK" || echo "$s FAIL"
+         kconfig_trace firmware_trace netlink_trace media_topo \
+         bootcfg_trace apex_locate; do
+  python3 .codenav/scripts/$s.py --help >/dev/null && echo "$s OK" || echo "$s FAIL"
 done
 
 # AGENTS.md 模板段落已合入且仅一份
@@ -143,7 +147,7 @@ done
 
 | 场景 | 动作 |
 |---|---|
-| 本 skill 的脚本升级 | 重跑 `setup`（`scripts/` 里 13 个 .py 被覆盖；AGENTS.md 段落因幂等标记会跳过） |
+| 本 skill 的脚本升级 | 重跑 `setup`（`.codenav/scripts/` 里 15 个 .py 被覆盖；AGENTS.md 段落因幂等标记会跳过，模板 `v=N` 升版才替换） |
 | AGENTS.md 模板有更新，想强制重注入 | 手工删除 `<!-- BEGIN: … -->` 到 `<!-- END: … -->` 之间的内容，再跑 `setup` |
 | `androidbsp-codeindex-setup` 被完全重装（AGENTS.md 被覆盖） | 重跑本 skill `setup`，重新注入 domaintrace 段落 |
 
@@ -173,9 +177,27 @@ skills/androidbsp-domaintrace-setup/
 │   ├── kconfig_trace.py                  # Kconfig：defconfig ↔ 定义 ↔ #ifdef ↔ Makefile
 │   ├── firmware_trace.py                 # Firmware：request_firmware + 打包；kmod 自动加载
 │   ├── netlink_trace.py                  # Netlink：genl_register_family ↔ userspace 使用
-│   └── media_topo.py                     # V4L2：subdev 静态注册 + pad link + DT port
+│   ├── media_topo.py                     # V4L2：subdev 静态注册 + pad link + DT port
+│   │
+│   │ ── 新增 2 个（启动/打包维度） ──
+│   ├── bootcfg_trace.py                  # bootconfig / cmdline 参数 ↔ 读取点
+│   └── apex_locate.py                    # APEX 模块定位与 manifest 追踪
 └── evals/evals.json                      # 本 skill 的测试用例
 ```
 
 > 脚本的**使用规则**统一由 `assets/AGENTS.md.domaintrace.template` 负责，**不在 SKILL.md 里重复**。
 > SKILL.md 只管 "怎么把环境部署到位"，一次性；AGENTS.md 模板管 "日常怎么用"，长期生效。
+
+---
+
+## 姐妹 skill
+
+- `/code-cross setup` — 符号编码跨边界（JNI / AIDL / HIDL / syscall / ioctl）
+- `/codenav setup-all` — 一步到位完整部署
+
+## 未来：runtime-trace skill 接入
+
+本 skill 部署的脚本默认向 `.codenav/events.jsonl` 追加 event。未来 runtime-trace
+skill 会向同一文件追加 `runtime-ftrace` / `runtime-bpftrace` / `runtime-logcat` /
+`runtime-dmesg` 等 source 的 event，AI agent 读取时按 schema `androidbsp.event/v1`
+统一合并。本 skill 输出**已经满足这一契约**，无需改动。
