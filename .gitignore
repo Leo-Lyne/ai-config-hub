@@ -3,3 +3,19 @@ skills/*-workspace/
 
 # External repos cloned for sync-ai.sh (independent git repos)
 repos/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local validation outputs (machine-specific, not portable)
+skills/_validation/baseline_atk/
+skills/_validation/run_*/
