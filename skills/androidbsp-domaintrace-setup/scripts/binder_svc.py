@@ -3,292 +3,246 @@
 Binder service 注册 ↔ 进程 ↔ VINTF manifest 追踪。
 
 用法：
-  # 按 service 名追踪
   binder_svc.py --service "camera.provider"
   binder_svc.py --service ICameraProvider
-
-  # 按 .rc 进程名追踪（找该进程注册了哪些 service）
   binder_svc.py --process cameraserver
-
-  # 按 VINTF HAL 名追踪
   binder_svc.py --hal android.hardware.camera.provider
-
-  # 全量扫描 VINTF manifest
   binder_svc.py --scan [--out .binder_svc.idx]
 
-识别链路：
-  1. ServiceManager 注册
-     C++:   ServiceManager::addService("name", ...)
-            defaultServiceManager()->addService(...)
-     Java:  ServiceManager.addService("name", ...)
-  2. ServiceManager 获取
-     C++:   ServiceManager::getService("name")
-            IFoo::getService() (HIDL)
-     Java:  ServiceManager.getService("name")
-  3. .rc 文件：service xxx /vendor/bin/... 定义进程
-  4. VINTF manifest：
-     /vendor/manifest.xml
-     /system/manifest.xml
-     hardware/interfaces/**/manifest.xml
-     device/**/manifest.xml
+Task 11 扩展：
+  - 多分区 VINTF manifest：扫描 system / vendor / odm / system_ext / product
+    每个分区的 etc/vintf/manifest.xml + manifest/*.xml
+  - 多候选 compat matrix：compatibility_matrix.<level>.xml（如 30 / 31 / 32 / 33 / 34）
 
-依赖：rg, fd。
+依赖：rg。
 """
 
-import argparse
+from __future__ import annotations
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _bsp_common import (
+    Finding, Emitter, make_parser, rg_find, scan_partitions, first_existing,
+    require_version,
+)
 
-def run(cmd, timeout=120):
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return r.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return ''
-
-
-def emit(tag: str, location: str, info: str = ''):
-    print(f'{tag}\t{location}\t{info}')
+require_version("1.0.0")
 
 
-def trace_service(root: Path, svc_name: str):
-    """按 service 名追踪：注册点、获取点、.rc 声明、VINTF。"""
+VINTF_GLOBS = ['manifest*.xml', 'compatibility_matrix*.xml',
+               'vintf/*.xml', 'manifest/*.xml']
+
+
+def _vintf_roots(bsp_root: Path) -> list[Path]:
+    """返回多分区 VINTF 搜索根。"""
+    roots: list[Path] = []
+    for part_vintf in scan_partitions(bsp_root, 'etc/vintf'):
+        roots.append(part_vintf)
+    # 顶层：hardware/interfaces、device、vendor（源码树）
+    for sub in ('hardware/interfaces', 'device', 'vendor'):
+        p = bsp_root / sub
+        if p.exists():
+            roots.append(p)
+    if not roots:
+        roots.append(bsp_root)
+    return roots
+
+
+def _compat_matrix_candidates(bsp_root: Path) -> list[Path]:
+    """探测 compatibility_matrix.<level>.xml 多候选。"""
+    found = []
+    for part_vintf in scan_partitions(bsp_root, 'etc/vintf'):
+        for level in ('29', '30', '31', '32', '33', '34', '35'):
+            cand = part_vintf / f'compatibility_matrix.{level}.xml'
+            if cand.exists():
+                found.append(cand)
+        # 不带 level 的
+        cand = part_vintf / 'compatibility_matrix.xml'
+        if cand.exists():
+            found.append(cand)
+    return found
+
+
+def trace_service(e: Emitter, bsp_root: Path, svc_name: str):
     esc = re.escape(svc_name)
 
-    # 1. C++ addService
-    args = ['rg', '-n', '--no-heading',
-            rf'addService\s*\([^)]*"{esc}"',
-            '-g', '*.cpp', '-g', '*.cc', '-g', '*.h', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('SVC-REGISTER', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    # C++/Java addService
+    for globs, langtag in (
+            (['*.cpp', '*.cc', '*.h'], 'cpp'),
+            (['*.java'], 'java')):
+        for f, l, snip in rg_find(rf'addService\s*\([^)]*"{esc}"',
+                                  globs=globs, root=bsp_root):
+            e.emit(Finding(tag='SVC-REGISTER', file=f, line=l, snippet=snip),
+                   confidence='high', source='static-rg',
+                   tags=['binder', 'register', langtag])
 
-    # Java addService
-    args = ['rg', '-n', '--no-heading',
-            rf'addService\s*\([^)]*"{esc}"',
-            '-g', '*.java', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('SVC-REGISTER', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    # getService
+    for globs, langtag in (
+            (['*.cpp', '*.cc', '*.h'], 'cpp'),
+            (['*.java'], 'java')):
+        for f, l, snip in rg_find(rf'getService\s*\([^)]*"{esc}"',
+                                  globs=globs, root=bsp_root):
+            e.emit(Finding(tag='SVC-GET', file=f, line=l, snippet=snip),
+                   confidence='high', source='static-rg',
+                   tags=['binder', 'get', langtag])
 
-    # 2. C++ getService
-    args = ['rg', '-n', '--no-heading',
-            rf'getService\s*\([^)]*"{esc}"',
-            '-g', '*.cpp', '-g', '*.cc', '-g', '*.h', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('SVC-GET', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
-
-    # Java getService
-    args = ['rg', '-n', '--no-heading',
-            rf'getService\s*\([^)]*"{esc}"',
-            '-g', '*.java', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('SVC-GET', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
-
-    # 如果 svc_name 以 I 开头，也找 HIDL getService 模式
     if svc_name.startswith('I'):
-        args = ['rg', '-n', '--no-heading',
-                rf'{esc}::getService\s*\(',
-                '-g', '*.cpp', '-g', '*.cc', '-g', '*.h', str(root)]
-        for line in run(args).splitlines():
-            m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-            if m:
-                emit('SVC-GET', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+        for f, l, snip in rg_find(rf'{esc}::getService\s*\(',
+                                  globs=['*.cpp', '*.cc', '*.h'], root=bsp_root):
+            e.emit(Finding(tag='SVC-GET', file=f, line=l, snippet=snip),
+                   confidence='high', source='static-rg',
+                   tags=['binder', 'hidl'])
 
-    # 3. .rc 文件：service 名与二进制路径
-    args = ['rg', '-n', '--no-heading',
-            rf'^\s*service\s+{esc}\s',
-            '-g', '*.rc', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('RC-SERVICE', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    # .rc: service 名
+    for f, l, snip in rg_find(rf'^\s*service\s+{esc}\s',
+                              globs=['*.rc'], root=bsp_root):
+        e.emit(Finding(tag='RC-SERVICE', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['binder', 'rc'])
 
-    # 也通过 interface 声明找 .rc 里的 interface aidl/hidl 行
-    args = ['rg', '-n', '--no-heading',
-            rf'^\s*interface\s+\w+\s+{esc}',
-            '-g', '*.rc', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('RC-INTERFACE', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    for f, l, snip in rg_find(rf'^\s*interface\s+\w+\s+{esc}',
+                              globs=['*.rc'], root=bsp_root):
+        e.emit(Finding(tag='RC-INTERFACE', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['binder', 'rc'])
 
-    # 4. VINTF manifest
-    _search_vintf(root, svc_name)
+    # VINTF（多分区）
+    _search_vintf(e, bsp_root, svc_name)
 
-    # 5. service_contexts（SELinux 可能也关心）
-    args = ['rg', '-n', '--no-heading',
-            rf'^{esc}\s',
-            '-g', '*service_contexts*', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('SVC-CONTEXT', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    # service_contexts
+    for f, l, snip in rg_find(rf'^{esc}\s',
+                              globs=['*service_contexts*'], root=bsp_root):
+        e.emit(Finding(tag='SVC-CONTEXT', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg',
+               tags=['binder', 'selinux'])
 
 
-def trace_process(root: Path, proc_name: str):
-    """按 .rc 进程名追踪：找该进程注册了哪些 service，以及 VINTF HAL。"""
+def trace_process(e: Emitter, bsp_root: Path, proc_name: str):
     esc = re.escape(proc_name)
 
-    # .rc 文件里 service 定义
-    args = ['rg', '-n', '--no-heading',
-            rf'^\s*service\s+{esc}\s',
-            '-g', '*.rc', str(root)]
     rc_files = set()
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('RC-SERVICE', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
-            rc_files.add(m.group(1))
+    for f, l, snip in rg_find(rf'^\s*service\s+{esc}\s',
+                              globs=['*.rc'], root=bsp_root):
+        e.emit(Finding(tag='RC-SERVICE', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['binder', 'rc'])
+        rc_files.add(f)
 
-    # 同 .rc 文件里的 interface 声明
     for rc in rc_files:
-        for line in run(['rg', '-n', r'^\s*interface\s+', rc]).splitlines():
-            m = re.match(r'^(\d+):(.*)$', line)
-            if m:
-                emit('RC-INTERFACE', f'{rc}:{m.group(1)}', m.group(2).strip())
+        for f, l, snip in rg_find(r'^\s*interface\s+', root=Path(rc)):
+            e.emit(Finding(tag='RC-INTERFACE', file=rc, line=l, snippet=snip),
+                   confidence='med', source='static-rg',
+                   tags=['binder', 'rc'])
 
-    # 找进程二进制对应的源码目录（通过 Android.bp/Android.mk 里的 cc_binary 名）
-    args = ['rg', '-n', '--no-heading',
-            rf'name\s*:\s*"{esc}"',
-            '-g', 'Android.bp', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('BUILD-DEF', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    # Android.bp
+    for f, l, snip in rg_find(rf'name\s*:\s*"{esc}"',
+                              globs=['Android.bp'], root=bsp_root):
+        e.emit(Finding(tag='BUILD-DEF', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['binder', 'build'])
 
-    # VINTF：搜进程名在 manifest 里的 executable 属性
-    args = ['rg', '-n', '--no-heading',
-            rf'{esc}',
-            '-g', 'manifest*.xml', '-g', 'compatibility_matrix*.xml', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('VINTF', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    # VINTF（多分区）
+    for root in _vintf_roots(bsp_root):
+        for f, l, snip in rg_find(rf'{esc}',
+                                  globs=VINTF_GLOBS, root=root):
+            e.emit(Finding(tag='VINTF', file=f, line=l, snippet=snip),
+                   confidence='med', source='static-rg',
+                   tags=['binder', 'vintf'])
 
 
-def trace_hal(root: Path, hal_name: str):
-    """按 VINTF HAL FQDN 追踪（如 android.hardware.camera.provider）。"""
+def trace_hal(e: Emitter, bsp_root: Path, hal_name: str):
     esc = re.escape(hal_name)
 
-    # VINTF manifest/compatibility_matrix
-    args = ['rg', '-n', '--no-heading',
-            rf'{esc}',
-            '-g', 'manifest*.xml', '-g', 'compatibility_matrix*.xml',
-            '-g', 'vintf/*.xml', '-g', 'manifest/*.xml',
-            str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('VINTF', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    for root in _vintf_roots(bsp_root):
+        for f, l, snip in rg_find(rf'{esc}', globs=VINTF_GLOBS, root=root):
+            e.emit(Finding(tag='VINTF', file=f, line=l, snippet=snip),
+                   confidence='high', source='static-rg',
+                   tags=['binder', 'vintf'])
 
-    # .rc 文件里 interface aidl/hidl 行
-    args = ['rg', '-n', '--no-heading',
-            rf'interface\s+\w+\s+{esc}',
-            '-g', '*.rc', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('RC-INTERFACE', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    # 多候选 compat matrix
+    for matrix in _compat_matrix_candidates(bsp_root):
+        for f, l, snip in rg_find(rf'{esc}', root=matrix):
+            e.emit(Finding(tag='VINTF-MATRIX', file=f, line=l, snippet=snip),
+                   confidence='high', source='static-rg',
+                   tags=['binder', 'vintf', 'matrix'])
 
-    # AIDL 接口声明
-    args = ['rg', '-n', '--no-heading',
-            rf'package\s+{esc}',
-            '-g', '*.aidl', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('AIDL-PACKAGE', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    for f, l, snip in rg_find(rf'interface\s+\w+\s+{esc}',
+                              globs=['*.rc'], root=bsp_root):
+        e.emit(Finding(tag='RC-INTERFACE', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['binder', 'rc'])
 
-    # C++ 侧注册
-    args = ['rg', '-n', '--no-heading',
-            rf'"{esc}[/"]',
-            '-g', '*.cpp', '-g', '*.cc', str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('HAL-REF', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+    for f, l, snip in rg_find(rf'package\s+{esc}',
+                              globs=['*.aidl'], root=bsp_root):
+        e.emit(Finding(tag='AIDL-PACKAGE', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['binder', 'aidl'])
+
+    for f, l, snip in rg_find(rf'"{esc}[/"]',
+                              globs=['*.cpp', '*.cc'], root=bsp_root):
+        e.emit(Finding(tag='HAL-REF', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['binder', 'hal'])
 
 
-def _search_vintf(root: Path, keyword: str):
-    """在 VINTF 相关 XML 文件中搜索关键字。"""
-    args = ['rg', '-n', '--no-heading',
-            re.escape(keyword),
-            '-g', 'manifest*.xml', '-g', 'compatibility_matrix*.xml',
-            '-g', 'vintf/*.xml',
-            str(root)]
-    for line in run(args).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            emit('VINTF', f'{m.group(1)}:{m.group(2)}', m.group(3).strip())
+def _search_vintf(e: Emitter, bsp_root: Path, keyword: str):
+    esc = re.escape(keyword)
+    for root in _vintf_roots(bsp_root):
+        for f, l, snip in rg_find(esc, globs=VINTF_GLOBS, root=root):
+            e.emit(Finding(tag='VINTF', file=f, line=l, snippet=snip),
+                   confidence='med', source='static-rg',
+                   tags=['binder', 'vintf'])
 
 
-def do_scan(root: Path, out_path: Optional[Path]):
-    """全量扫描 VINTF manifest 里的 HAL 声明。"""
+def do_scan(e: Emitter, bsp_root: Path, out_path: Optional[Path]):
     lines = []
 
-    # 扫 manifest.xml 里的 <hal> 块
-    args = ['rg', '-n', '--no-heading',
-            r'<name>([\w.]+)</name>',
-            '-g', 'manifest*.xml', '-g', 'vintf/*.xml',
-            str(root)]
-    for line in run(args, timeout=120).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            cm = re.search(r'<name>([\w.]+)</name>', m.group(3))
+    for root in _vintf_roots(bsp_root):
+        for f, l, snip in rg_find(
+                r'<name>([\w.]+)</name>',
+                globs=['manifest*.xml', 'vintf/*.xml'], root=root, timeout=120):
+            cm = re.search(r'<name>([\w.]+)</name>', snip)
             if cm:
-                lines.append(f'VINTF-HAL\t{m.group(1)}:{m.group(2)}\t{cm.group(1)}')
+                lines.append(f'VINTF-HAL\t{f}:{l}\t{cm.group(1)}')
+                e.emit(Finding(tag='VINTF-HAL', file=f, line=l,
+                               snippet=cm.group(1)),
+                       confidence='high', source='static-rg',
+                       tags=['binder', 'vintf', 'scan'])
 
-    # 扫 .rc 文件里的 service + interface
-    args = ['rg', '-n', '--no-heading',
-            r'^\s*service\s+(\w+)\s',
-            '-g', '*.rc', str(root)]
-    for line in run(args, timeout=120).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            cm = re.search(r'service\s+(\w+)', m.group(3))
-            if cm:
-                lines.append(f'RC-SERVICE\t{m.group(1)}:{m.group(2)}\t{cm.group(1)}')
+    for f, l, snip in rg_find(r'^\s*service\s+(\w+)\s',
+                              globs=['*.rc'], root=bsp_root, timeout=120):
+        cm = re.search(r'service\s+(\w+)', snip)
+        if cm:
+            lines.append(f'RC-SERVICE\t{f}:{l}\t{cm.group(1)}')
+            e.emit(Finding(tag='RC-SERVICE', file=f, line=l,
+                           snippet=cm.group(1)),
+                   confidence='high', source='static-rg',
+                   tags=['binder', 'rc', 'scan'])
 
-    output = '\n'.join(lines)
     if out_path:
-        out_path.write_text(output + '\n')
+        out_path.write_text('\n'.join(lines) + '\n')
         print(f'Wrote {len(lines)} entries to {out_path}', file=sys.stderr)
-    else:
-        print(output)
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Binder service ↔ 进程 ↔ VINTF 追踪')
-    ap.add_argument('--service', '-s', help='service 名（如 "camera.provider" 或 ICameraProvider）')
-    ap.add_argument('--process', '-p', help='.rc 进程名（如 cameraserver）')
-    ap.add_argument('--hal', help='VINTF HAL FQDN（如 android.hardware.camera.provider）')
-    ap.add_argument('--scan', action='store_true', help='全量扫描 VINTF manifest')
-    ap.add_argument('--out', type=Path, default=None, help='--scan 输出文件')
-    ap.add_argument('--root', type=Path, default=Path.cwd(), help='搜索根（默认 cwd）')
-    args = ap.parse_args()
+    p = make_parser('Binder service ↔ 进程 ↔ VINTF 追踪（多分区）')
+    p.add_argument('--service', '-s', help='service 名')
+    p.add_argument('--process', '-p', help='.rc 进程名')
+    p.add_argument('--hal', help='VINTF HAL FQDN')
+    p.add_argument('--scan', action='store_true', help='全量扫描 VINTF manifest')
+    p.add_argument('--out', type=Path, default=None, help='--scan 输出文件')
+    args = p.parse_args()
 
-    if args.scan:
-        do_scan(args.root, args.out)
-    elif args.service:
-        trace_service(args.root, args.service)
-    elif args.process:
-        trace_process(args.root, args.process)
-    elif args.hal:
-        trace_hal(args.root, args.hal)
-    else:
-        ap.print_help()
-        sys.exit(1)
+    search_root = args.root or Path.cwd()
+
+    with Emitter(args, Path(__file__).name) as e:
+        if args.scan:
+            do_scan(e, search_root, args.out)
+        elif args.service:
+            trace_service(e, search_root, args.service)
+        elif args.process:
+            trace_process(e, search_root, args.process)
+        elif args.hal:
+            trace_hal(e, search_root, args.hal)
+        else:
+            p.print_help()
+            sys.exit(1)
 
 
 if __name__ == '__main__':

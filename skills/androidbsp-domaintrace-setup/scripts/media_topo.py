@@ -24,199 +24,177 @@ V4L2 / Media Controller 静态拓扑追踪。
   6. v4l2_async_nf_add_fwnode                     async notifier（DT 绑定）
   7. DT: port / endpoint                          CSI/DSI 连接描述
 
-注意：运行时 media-ctl 配置的 link 无法通过静态分析追踪。
-
 依赖：rg。
 """
 
-import argparse
+from __future__ import annotations
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _bsp_common import (
+    Finding, Emitter, make_parser, rg_find, require_version,
+)
 
-def run(cmd, timeout=120):
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return r.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return ''
-
-
-def emit(tag: str, location: str, info: str = ''):
-    print(f'{tag}\t{location}\t{info}')
+require_version("1.0.0")
 
 
-def _rg(root, pattern, globs, timeout=120):
-    args = ['rg', '-n', '--no-heading', pattern]
-    for g in globs:
-        args.extend(['-g', g])
-    args.append(str(root))
-    results = []
-    for line in run(args, timeout).splitlines():
-        m = re.match(r'^([^:]+):(\d+):(.*)$', line)
-        if m:
-            results.append((m.group(1), m.group(2), m.group(3).strip()))
-    return results
-
-
-def trace_subdev(root: Path, name: str):
-    """追踪 v4l2 subdev driver。"""
+def trace_subdev(e: Emitter, root: Path, name: str):
     esc = re.escape(name)
 
-    # v4l2_subdev_ops 定义
-    for f, l, c in _rg(root, rf'v4l2_subdev_(pad_|video_|core_)?ops\b.*{esc}|{esc}.*v4l2_subdev_(pad_|video_|core_)?ops',
-                        ['*.c']):
-        emit('V4L2-OPS', f'{f}:{l}', c)
+    for f, l, snip in rg_find(
+            rf'v4l2_subdev_(pad_|video_|core_)?ops\b.*{esc}|{esc}.*v4l2_subdev_(pad_|video_|core_)?ops',
+            globs=['*.c'], root=root):
+        e.emit(Finding(tag='V4L2-OPS', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['v4l2', 'subdev'])
 
-    # subdev init
-    for f, l, c in _rg(root, rf'v4l2_(i2c_)?subdev_init\s*\(',
-                        ['*.c']):
+    for f, l, snip in rg_find(r'v4l2_(i2c_)?subdev_init\s*\(',
+                              globs=['*.c'], root=root):
         if name in f.lower() or name.replace('-', '_') in f.lower():
-            emit('V4L2-INIT', f'{f}:{l}', c)
+            e.emit(Finding(tag='V4L2-INIT', file=f, line=l, snippet=snip),
+                   confidence='med', source='static-rg', tags=['v4l2'])
 
-    # media_entity_pads_init
-    for f, l, c in _rg(root, rf'media_entity_pads_init\s*\(',
-                        ['*.c']):
+    for f, l, snip in rg_find(r'media_entity_pads_init\s*\(',
+                              globs=['*.c'], root=root):
         if name in f.lower() or name.replace('-', '_') in f.lower():
-            emit('MEDIA-PADS', f'{f}:{l}', c)
+            e.emit(Finding(tag='MEDIA-PADS', file=f, line=l, snippet=snip),
+                   confidence='med', source='static-rg', tags=['media'])
 
-    # v4l2_async_register_subdev
-    for f, l, c in _rg(root, rf'v4l2_async_register_subdev\w*\s*\(',
-                        ['*.c']):
+    for f, l, snip in rg_find(r'v4l2_async_register_subdev\w*\s*\(',
+                              globs=['*.c'], root=root):
         if name in f.lower() or name.replace('-', '_') in f.lower():
-            emit('V4L2-ASYNC-REG', f'{f}:{l}', c)
+            e.emit(Finding(tag='V4L2-ASYNC-REG', file=f, line=l, snippet=snip),
+                   confidence='med', source='static-rg', tags=['v4l2', 'async'])
 
-    # media_create_pad_link（在所有文件搜，因为 link 可能在 bridge driver 里建）
-    for f, l, c in _rg(root, rf'media_create_pad_link\s*\([^)]*{esc}',
-                        ['*.c']):
-        emit('MEDIA-LINK', f'{f}:{l}', c)
+    for f, l, snip in rg_find(rf'media_create_pad_link\s*\([^)]*{esc}',
+                              globs=['*.c'], root=root):
+        e.emit(Finding(tag='MEDIA-LINK', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['media', 'link'])
 
-    # 文件名匹配的源文件里找 probe
-    for f, l, c in _rg(root, rf'\.probe\s*=',
-                        ['*.c']):
+    for f, l, snip in rg_find(r'\.probe\s*=', globs=['*.c'], root=root):
         if name in f.lower() or name.replace('-', '_') in f.lower():
-            emit('V4L2-PROBE', f'{f}:{l}', c)
+            e.emit(Finding(tag='V4L2-PROBE', file=f, line=l, snippet=snip),
+                   confidence='med', source='static-rg', tags=['v4l2', 'probe'])
 
-    # DT compatible（sensor driver 通常在 of_device_id 里）
-    for f, l, c in _rg(root, rf'\.compatible\s*=\s*"[^"]*{esc}[^"]*"',
-                        ['*.c']):
-        emit('V4L2-COMPAT', f'{f}:{l}', c)
+    for f, l, snip in rg_find(rf'\.compatible\s*=\s*"[^"]*{esc}[^"]*"',
+                              globs=['*.c'], root=root):
+        e.emit(Finding(tag='V4L2-COMPAT', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['v4l2', 'dt'])
 
-    # DT 里的 port/endpoint
-    _trace_dt_ports(root, name)
+    _trace_dt_ports(e, root, name)
 
 
-def _trace_dt_ports(root: Path, name: str):
-    """在 DTS 里找包含 name 的节点下的 port/endpoint。"""
+def _trace_dt_ports(e: Emitter, root: Path, name: str):
     esc = re.escape(name)
 
-    # DTS 里包含该 compatible 的节点
-    for f, l, c in _rg(root, rf'compatible\s*=\s*"[^"]*{esc}[^"]*"',
-                        ['*.dts', '*.dtsi']):
-        emit('V4L2-DT-NODE', f'{f}:{l}', c)
+    for f, l, snip in rg_find(rf'compatible\s*=\s*"[^"]*{esc}[^"]*"',
+                              globs=['*.dts', '*.dtsi'], root=root):
+        e.emit(Finding(tag='V4L2-DT-NODE', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['v4l2', 'dt'])
 
-    # port@N / endpoint 节点（可能在 sensor 或 bridge 的 DTS 定义里）
-    # 搜所有包含 port 的 DTS 文件
-    for f, l, c in _rg(root, r'port(@\d+)?\s*\{',
-                        ['*.dts', '*.dtsi']):
+    for f, l, snip in rg_find(r'port(@\d+)?\s*\{',
+                              globs=['*.dts', '*.dtsi'], root=root):
         if name in f.lower():
-            emit('V4L2-DT-PORT', f'{f}:{l}', c)
+            e.emit(Finding(tag='V4L2-DT-PORT', file=f, line=l, snippet=snip),
+                   confidence='low', source='static-rg', tags=['v4l2', 'dt'])
 
-    for f, l, c in _rg(root, r'endpoint(@\d+)?\s*\{',
-                        ['*.dts', '*.dtsi']):
+    for f, l, snip in rg_find(r'endpoint(@\d+)?\s*\{',
+                              globs=['*.dts', '*.dtsi'], root=root):
         if name in f.lower():
-            emit('V4L2-DT-ENDPOINT', f'{f}:{l}', c)
+            e.emit(Finding(tag='V4L2-DT-ENDPOINT', file=f, line=l, snippet=snip),
+                   confidence='low', source='static-rg', tags=['v4l2', 'dt'])
 
 
-def trace_entity(root: Path, name: str):
-    """按 media entity 名搜索。"""
+def trace_entity(e: Emitter, root: Path, name: str):
     esc = re.escape(name)
 
-    for f, l, c in _rg(root, rf'"{esc}"',
-                        ['*.c', '*.h']):
-        if any(kw in c for kw in ['entity', 'media', 'subdev', 'sd->name', 'v4l2']):
-            emit('ENTITY-REF', f'{f}:{l}', c)
+    for f, l, snip in rg_find(rf'"{esc}"', globs=['*.c', '*.h'], root=root):
+        if any(kw in snip for kw in ['entity', 'media', 'subdev', 'sd->name', 'v4l2']):
+            e.emit(Finding(tag='ENTITY-REF', file=f, line=l, snippet=snip),
+                   confidence='low', source='static-rg', tags=['media', 'entity'])
 
-    for f, l, c in _rg(root, rf'\.name\s*=\s*"{esc}"',
-                        ['*.c']):
-        emit('ENTITY-NAME', f'{f}:{l}', c)
+    for f, l, snip in rg_find(rf'\.name\s*=\s*"{esc}"',
+                              globs=['*.c'], root=root):
+        e.emit(Finding(tag='ENTITY-NAME', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['media', 'entity'])
 
 
-def trace_port(root: Path, node: str):
-    """追踪 DT port/endpoint 连接关系。"""
+def trace_port(e: Emitter, root: Path, node: str):
     esc = re.escape(node)
 
-    # 找 compatible 节点
-    for f, l, c in _rg(root, rf'compatible\s*=\s*"[^"]*{esc}[^"]*"',
-                        ['*.dts', '*.dtsi']):
-        emit('PORT-NODE', f'{f}:{l}', c)
+    for f, l, snip in rg_find(rf'compatible\s*=\s*"[^"]*{esc}[^"]*"',
+                              globs=['*.dts', '*.dtsi'], root=root):
+        e.emit(Finding(tag='PORT-NODE', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['dt', 'port'])
 
-    # remote-endpoint
-    for f, l, c in _rg(root, rf'remote-endpoint\s*=\s*<&\w*{esc}\w*>',
-                        ['*.dts', '*.dtsi']):
-        emit('PORT-REMOTE', f'{f}:{l}', c)
+    for f, l, snip in rg_find(rf'remote-endpoint\s*=\s*<&\w*{esc}\w*>',
+                              globs=['*.dts', '*.dtsi'], root=root):
+        e.emit(Finding(tag='PORT-REMOTE', file=f, line=l, snippet=snip),
+               confidence='high', source='static-rg', tags=['dt', 'port'])
 
-    # v4l2_async_nf_add_fwnode / v4l2_async_notifier_add_*
-    for f, l, c in _rg(root, r'v4l2_async_n[fo]_add_\w+\s*\(',
-                        ['*.c']):
-        emit('ASYNC-NOTIFIER', f'{f}:{l}', c)
+    for f, l, snip in rg_find(r'v4l2_async_n[fo]_add_\w+\s*\(',
+                              globs=['*.c'], root=root):
+        e.emit(Finding(tag='ASYNC-NOTIFIER', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['v4l2', 'async'])
 
-    # of_graph_get_remote_endpoint / of_graph_get_next_endpoint
-    for f, l, c in _rg(root, r'of_graph_get_(remote_endpoint|next_endpoint|port_by_id)\s*\(',
-                        ['*.c']):
-        emit('OF-GRAPH', f'{f}:{l}', c)
+    for f, l, snip in rg_find(
+            r'of_graph_get_(remote_endpoint|next_endpoint|port_by_id)\s*\(',
+            globs=['*.c'], root=root):
+        e.emit(Finding(tag='OF-GRAPH', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['dt', 'graph'])
 
 
-def do_scan(root: Path, out_path: Optional[Path]):
+def do_scan(e: Emitter, root: Path, out_path: Optional[Path]):
     lines = []
 
-    # 所有 v4l2_subdev 注册
-    for f, l, c in _rg(root, r'v4l2_(i2c_)?subdev_init\s*\(',
-                        ['*.c'], timeout=300):
-        lines.append(f'V4L2-INIT\t{f}:{l}\t{c}')
+    for f, l, snip in rg_find(r'v4l2_(i2c_)?subdev_init\s*\(',
+                              globs=['*.c'], root=root, timeout=300):
+        lines.append(f'V4L2-INIT\t{f}:{l}\t{snip}')
+        e.emit(Finding(tag='V4L2-INIT', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['v4l2', 'scan'])
 
-    # 所有 media_create_pad_link
-    for f, l, c in _rg(root, r'media_create_pad_link\s*\(',
-                        ['*.c'], timeout=300):
-        lines.append(f'MEDIA-LINK\t{f}:{l}\t{c}')
+    for f, l, snip in rg_find(r'media_create_pad_link\s*\(',
+                              globs=['*.c'], root=root, timeout=300):
+        lines.append(f'MEDIA-LINK\t{f}:{l}\t{snip}')
+        e.emit(Finding(tag='MEDIA-LINK', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['media', 'scan'])
 
-    # 所有 v4l2_async_register_subdev
-    for f, l, c in _rg(root, r'v4l2_async_register_subdev\w*\s*\(',
-                        ['*.c'], timeout=300):
-        lines.append(f'V4L2-ASYNC-REG\t{f}:{l}\t{c}')
+    for f, l, snip in rg_find(r'v4l2_async_register_subdev\w*\s*\(',
+                              globs=['*.c'], root=root, timeout=300):
+        lines.append(f'V4L2-ASYNC-REG\t{f}:{l}\t{snip}')
+        e.emit(Finding(tag='V4L2-ASYNC-REG', file=f, line=l, snippet=snip),
+               confidence='med', source='static-rg', tags=['v4l2', 'scan'])
 
-    output = '\n'.join(lines)
     if out_path:
-        out_path.write_text(output + '\n')
+        out_path.write_text('\n'.join(lines) + '\n')
         print(f'Wrote {len(lines)} entries to {out_path}', file=sys.stderr)
-    else:
-        print(output)
 
 
 def main():
-    ap = argparse.ArgumentParser(description='V4L2 / Media Controller 静态拓扑追踪')
-    ap.add_argument('--subdev', '-s', help='subdev driver 名（如 imx219）')
-    ap.add_argument('--entity', '-e', help='media entity 名')
-    ap.add_argument('--port', '-p', help='DT port/endpoint 追踪（compatible 或 node 名）')
-    ap.add_argument('--scan', action='store_true', help='全量扫描所有 v4l2 subdev')
-    ap.add_argument('--out', type=Path, default=None, help='--scan 输出文件')
-    ap.add_argument('--root', type=Path, default=Path.cwd(), help='搜索根（默认 cwd）')
-    args = ap.parse_args()
+    p = make_parser('V4L2 / Media Controller 静态拓扑追踪')
+    p.add_argument('--subdev', '-s', help='subdev driver 名（如 imx219）')
+    p.add_argument('--entity', '-e', help='media entity 名')
+    p.add_argument('--port', help='DT port/endpoint 追踪（compatible 或 node 名）')
+    p.add_argument('--scan', action='store_true', help='全量扫描所有 v4l2 subdev')
+    p.add_argument('--out', type=Path, default=None, help='--scan 输出文件')
+    args = p.parse_args()
 
-    if args.scan:
-        do_scan(args.root, args.out)
-    elif args.subdev:
-        trace_subdev(args.root, args.subdev)
-    elif args.entity:
-        trace_entity(args.root, args.entity)
-    elif args.port:
-        trace_port(args.root, args.port)
-    else:
-        ap.print_help()
-        sys.exit(1)
+    search_root = args.root or Path.cwd()
+
+    with Emitter(args, Path(__file__).name) as e:
+        if args.scan:
+            do_scan(e, search_root, args.out)
+        elif args.subdev:
+            trace_subdev(e, search_root, args.subdev)
+        elif args.entity:
+            trace_entity(e, search_root, args.entity)
+        elif args.port:
+            trace_port(e, search_root, args.port)
+        else:
+            p.print_help()
+            sys.exit(1)
 
 
 if __name__ == '__main__':
