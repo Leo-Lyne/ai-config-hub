@@ -1,0 +1,53 @@
+{
+  "skill_name": "androidbsp-codecross-setup",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/code-cross --setup",
+      "expected_output": "前置满足时（项目根 AGENTS.md 含 androidbsp-codeindex-setup 字样），把 scripts/*.py 拷到项目 scripts/，把 assets/AGENTS.md.codecross.template 追加到项目 AGENTS.md（带 BEGIN/END 标记），最后跑三项冒烟验证",
+      "files": [],
+      "assertions": [
+        {"text": "先检查前置：grep androidbsp-codeindex-setup AGENTS.md，不满足就退出", "type": "contains_concept"},
+        {"text": "没有重建 gtags / compile_commands.json / 装 rg fd 等索引 skill 的职责", "type": "no_duplicate"},
+        {"text": "把 5 个 .py 脚本（xlang_find / jni_bridge / aidl_bridge / syscall_trace / ioctl_trace）拷到项目 scripts/", "type": "contains_concept"},
+        {"text": "通过 cat template >> AGENTS.md 注入使用规则，而不是用 heredoc 硬写字符串", "type": "structure"},
+        {"text": "注入前用 grep BEGIN 标记检查幂等，已注入则跳过", "type": "contains_concept"},
+        {"text": "执行三项冒烟：xlang_find.py --help、syscall_trace openat、grep -c BEGIN 标记", "type": "contains_concept"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/code-cross --setup",
+      "expected_output": "前置不满足（项目根没有 AGENTS.md，或 AGENTS.md 中无 androidbsp-codeindex-setup 字样）时，立刻停止并引导用户先跑 /code-index --setup <lunch 命令>，不要自行建索引",
+      "files": [],
+      "assertions": [
+        {"text": "检测到 AGENTS.md 不存在或无 codeindex-setup 标记后立即退出（exit 非零）", "type": "contains_concept"},
+        {"text": "引导用户先跑 /code-index --setup，而不是本 skill 自己去建 gtags / compdb", "type": "contains_concept"},
+        {"text": "没有触发任何 apt install / gtags / ninja 命令", "type": "no_detour"},
+        {"text": "错误提示说明了为什么要先跑索引 skill（本 skill 的脚本依赖它的产物）", "type": "contains_concept"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "我之前已经跑过 /code-cross --setup 了，现在想重跑，会不会把 AGENTS.md 里的 codecross 段落写两遍？",
+      "expected_output": "不会。模板带 BEGIN/END 标记，重跑时 grep 到 BEGIN 就跳过注入。如果想强制重注入（例如模板更新了），需要手工删除 BEGIN...END 之间的块再重跑",
+      "files": [],
+      "assertions": [
+        {"text": "明确指出有幂等保护（BEGIN/END 标记 + grep 检查）", "type": "contains_concept"},
+        {"text": "给出 '想强制重注入怎么办' 的具体操作：手工删 BEGIN...END 之间内容", "type": "actionable"},
+        {"text": "没有建议用户备份 AGENTS.md / 手写脚本 / 重装 skill 这些偏离方案", "type": "no_detour"}
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "我刚切了 lunch target 从 rk3568 换到 rk3588，也重新整编过了。code-cross 这边需要重跑 --setup 吗？",
+      "expected_output": "不需要。本 skill 的脚本不缓存任何 target 相关的索引，跨边界规则也与 lunch target 无关。切 target 只需按 androidbsp-codeindex-setup 的指引重建 gtags / compdb 即可",
+      "files": [],
+      "assertions": [
+        {"text": "明确回答：本 skill 不需要因切 target 而重跑", "type": "contains_concept"},
+        {"text": "指出要重跑的是 androidbsp-codeindex-setup（重建 gtags/compdb），而不是本 skill", "type": "contains_concept"},
+        {"text": "没有越界去讲 .active_files.idx / gtags 怎么重建的具体步骤（那是索引 skill 的职责）", "type": "no_duplicate"}
+      ]
+    }
+  ]
+}
