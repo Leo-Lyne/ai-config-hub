@@ -31,25 +31,28 @@ args:
 
 ## 前置要求
 
-**必须先跑过 `androidbsp-codeindex-setup` 并把索引使用规则注入 AGENTS.md。** 本 skill 产出的脚本内部依赖 `global`（gtags）、`rg`、`compile_commands.json`——这些工件由索引 skill 负责部署与验证，本 skill 不重复做。
+**必须先跑过 `androidbsp-codeindex-setup`。** 本 skill 产出的脚本内部依赖 `global`（gtags）、`rg`、`compile_commands.json`，并通过 `.codenav/scripts/_bsp_common.py` 公共库工作——这些工件由索引 skill 负责部署与验证，本 skill 不重复做。
 
-**唯一判据**：项目根 `AGENTS.md` 存在且包含 `androidbsp-codeindex-setup` 字样（索引 skill 的模板注入标记）。
+**判据**：工件齐全（`.codenav/scripts/_bsp_common.py`、`compile_commands.json`、`GTAGS` 三件齐），且公共库版本兼容。
 
 ```bash
 cd $BSP_ROOT
-grep -q "androidbsp-codeindex-setup" AGENTS.md 2>/dev/null || {
-  cat <<'EOF'
-❌ 前置要求未满足：未检测到 androidbsp-codeindex-setup 的部署痕迹。
-
-本 skill 依赖索引 skill 产出的 gtags / compile_commands.json / rg 等环境，
-以及 AGENTS.md 中已注入的索引使用规则。请先跑：
-
+[ -f .codenav/scripts/_bsp_common.py ] \
+  && [ -f compile_commands.json ] \
+  && [ -f GTAGS ] \
+  || { cat <<'EOF'
+❌ 前置要求未满足：codeindex-setup 未完成部署。
+缺少以下任一工件：.codenav/scripts/_bsp_common.py、compile_commands.json、GTAGS。
+请先跑：
   /codeindex setup
-
-确认项目根 AGENTS.md 里存在 "androidbsp-codeindex-setup" 段落后再回来跑 setup。
 EOF
   exit 1
 }
+
+# 验证公共库版本兼容
+python3 -c "import sys; sys.path.insert(0,'.codenav/scripts'); \
+  import _bsp_common as c; c.require_version('1.0.0')" \
+  || { echo "FAIL: _bsp_common 版本过旧，请重跑 /codeindex setup 升级"; exit 1; }
 ```
 
 不满足就停。不要自作主张去建 gtags / compdb / 装工具——那是索引 skill 的职责，重复做会破坏它的单一事实源。
@@ -62,29 +65,25 @@ EOF
 
 ```bash
 cd $BSP_ROOT
-mkdir -p scripts
-cp $SKILL_DIR/scripts/jni_bridge.py     scripts/
-cp $SKILL_DIR/scripts/aidl_bridge.py    scripts/
-cp $SKILL_DIR/scripts/syscall_trace.py  scripts/
-cp $SKILL_DIR/scripts/ioctl_trace.py    scripts/
-cp $SKILL_DIR/scripts/xlang_find.py     scripts/
-chmod +x scripts/*.py
+mkdir -p .codenav/scripts
+cp $SKILL_DIR/scripts/jni_bridge.py     .codenav/scripts/
+cp $SKILL_DIR/scripts/aidl_bridge.py    .codenav/scripts/
+cp $SKILL_DIR/scripts/syscall_trace.py  .codenav/scripts/
+cp $SKILL_DIR/scripts/ioctl_trace.py    .codenav/scripts/
+cp $SKILL_DIR/scripts/xlang_find.py     .codenav/scripts/
+chmod +x .codenav/scripts/*.py
 ```
 
 ### 2. 注入 AGENTS.md 使用规则（模板追加）
 
-把 `assets/AGENTS.md.codecross.template` 追加到项目根 `AGENTS.md` 末尾。模板首尾带
-`<!-- BEGIN/END: androidbsp-codecross-setup -->` 标记，用于幂等——已注入就跳过，避免重复。
+使用 codeindex-setup 部署的公共注入脚本 `.codenav/scripts/_inject_block.sh` 把
+`assets/AGENTS.md.codecross.template` 幂等地注入到项目根 `AGENTS.md`。模板首行带
+`v=N` 版本标记——已是最新版就跳过，旧版会原地升级，标记块互不破坏。
 
 ```bash
 cd $BSP_ROOT
-MARKER="BEGIN: androidbsp-codecross-setup"
-if grep -qF "$MARKER" AGENTS.md; then
-  echo "AGENTS.md 已注入过 codecross 段落，跳过。要强制重注入，手工删除 BEGIN…END 之间的块再重跑。"
-else
-  cat $SKILL_DIR/assets/AGENTS.md.codecross.template >> AGENTS.md
-  echo "codecross 段落已注入 AGENTS.md"
-fi
+.codenav/scripts/_inject_block.sh androidbsp-codecross-setup \
+  $SKILL_DIR/assets/AGENTS.md.codecross.template AGENTS.md
 ```
 
 Claude Code / Cursor / Codex 不需要再配——它们已由 `androidbsp-codeindex-setup` 接入同一份
@@ -96,10 +95,10 @@ Claude Code / Cursor / Codex 不需要再配——它们已由 `androidbsp-codei
 cd $BSP_ROOT
 
 # 脚本可执行
-python3 scripts/xlang_find.py --help >/dev/null && echo "xlang_find OK"
+python3 .codenav/scripts/xlang_find.py --help >/dev/null && echo "xlang_find OK"
 
 # 真实查询能跑通（能看到 USER-WRAPPER 或 KERNEL-ENTRY 任一行即通过）
-python3 scripts/syscall_trace.py openat 2>/dev/null | head -1 | grep -qE "(USER-WRAPPER|KERNEL-ENTRY)" \
+python3 .codenav/scripts/syscall_trace.py openat 2>/dev/null | head -1 | grep -qE "(USER-WRAPPER|KERNEL-ENTRY)" \
   && echo "syscall_trace OK" || echo "WARN: syscall_trace 未命中 openat，检查 compile_commands.json 是否覆盖 kernel"
 
 # AGENTS.md 模板段落已合入且仅一份
@@ -115,7 +114,7 @@ AI 会自己读。
 
 | 场景 | 动作 |
 |---|---|
-| 本 skill 的脚本升级 | 重跑 `setup`（`scripts/` 里 5 个 .py 被覆盖；AGENTS.md 段落因幂等标记会跳过） |
+| 本 skill 的脚本升级 | 重跑 `setup`（`.codenav/scripts/` 里 5 个 .py 被覆盖；AGENTS.md 段落按版本幂等——同版本跳过，新版本升级） |
 | AGENTS.md 模板有更新，想强制重注入 | 手工删除 `<!-- BEGIN: … -->` 到 `<!-- END: … -->` 之间的内容，再跑 `setup` |
 | 切换 lunch target / 重编 | **与本 skill 无关**——脚本不缓存索引，跨边界规则也不依赖具体 target。只需按索引 skill 的指引重建 gtags / compdb |
 | `androidbsp-codeindex-setup` 被完全重装（AGENTS.md 被覆盖） | 重跑本 skill `setup`，重新注入 codecross 段落 |
@@ -141,3 +140,10 @@ skills/androidbsp-codecross-setup/
 > 脚本的**使用规则**（什么时候调哪个、输出格式、局限、降级策略）统一由
 > `assets/AGENTS.md.codecross.template` 负责，**不在 SKILL.md 里重复**。
 > SKILL.md 只管 "怎么把环境部署到位"，一次性；AGENTS.md 模板管 "日常怎么用"，长期生效。
+
+---
+
+## 姐妹 skill
+
+- `/domaintrace setup` — 领域知识多步追踪（rg 能搜到但需要领域知识串联多步）
+- `/codenav setup-all` — 一步到位完整部署

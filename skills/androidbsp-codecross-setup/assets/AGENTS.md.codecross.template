@@ -1,5 +1,5 @@
 
-<!-- BEGIN: androidbsp-codecross-setup -->
+<!-- BEGIN: androidbsp-codecross-setup v=1 -->
 ## 跨边界追踪（JNI / AIDL / HIDL / syscall / ioctl）
 
 本段由 `androidbsp-codecross-setup` skill 部署。
