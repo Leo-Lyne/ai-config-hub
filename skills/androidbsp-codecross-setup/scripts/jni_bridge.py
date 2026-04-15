@@ -208,7 +208,7 @@ def from_java(e: Emitter, fqcn: str, method: str, root: Optional[Path],
     for fpath, line_no, snippet in gtags_lookup(sym, kind='def'):
         e.emit(Finding(tag='JNI-IMPL', file=fpath, line=line_no, snippet=snippet,
                        info={'symbol': sym}),
-               confidence='high', source='gtags', tags=['jni', 'impl'])
+               confidence='high', source='static-gtags', tags=['jni', 'impl'])
 
     # 带签名后缀变体 Java_*__xxx
     r = run_cmd(['global', '-c', sym], timeout=timeout)
@@ -222,7 +222,7 @@ def from_java(e: Emitter, fqcn: str, method: str, root: Optional[Path],
                     e.emit(Finding(tag='JNI-IMPL', file=fpath, line=line_no,
                                    snippet=snippet,
                                    info={'symbol': v, 'variant': 'signed'}),
-                           confidence='med', source='gtags',
+                           confidence='med', source='static-gtags',
                            tags=['jni', 'impl', 'variant'])
 
     # 动态注册
@@ -234,7 +234,7 @@ def from_c(e: Emitter, sym: str, root: Optional[Path], timeout: int):
     for fpath, line_no, snippet in gtags_lookup(sym, kind='def'):
         e.emit(Finding(tag='JNI-IMPL', file=fpath, line=line_no, snippet=snippet,
                        info={'symbol': sym}),
-               confidence='high', source='gtags', tags=['jni', 'impl'])
+               confidence='high', source='static-gtags', tags=['jni', 'impl'])
 
     # 动态注册（去掉 Java_ 前缀也可能是纯名字）
     find_register_natives(e, sym, root, timeout)
@@ -275,7 +275,7 @@ def do_scan(e: Emitter, root: Path, out_path: Optional[Path], timeout: int):
                 e.emit(Finding(tag='JNI-IMPL', file=cf, line=cl, snippet=cs,
                                info={'symbol': mangled, 'fqcn': fqcn,
                                      'method': method}),
-                       confidence='high', source='gtags', tags=['jni', 'impl'])
+                       confidence='high', source='static-gtags', tags=['jni', 'impl'])
                 lines.append(f'{lang}\t{fpath}:{line_no}\t{fqcn}.{method}\tC\t{cf}:{cl}\t{mangled}')
         else:
             lines.append(f'{lang}\t{fpath}:{line_no}\t{fqcn}.{method}\tC\t(not found)\t{mangled}')
