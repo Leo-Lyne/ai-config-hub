@@ -1,0 +1,29 @@
+{
+  "skill_name": "androidbsp-codenav",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/codenav setup-all source build/envsetup.sh && lunch atk_rk3568_r-userdebug && ./build.sh -UKAp",
+      "expected_output": "依次跑 codeindex setup → codecross setup → domaintrace setup 三个 skill；任一冒烟失败即停",
+      "files": [],
+      "assertions": [
+        {"text": "首先调起 androidbsp-codeindex-setup 完成 Phase 1-5", "type": "contains_concept"},
+        {"text": "codeindex 冒烟通过后才调 androidbsp-codecross-setup", "type": "structure"},
+        {"text": "codecross 冒烟通过后才调 androidbsp-domaintrace-setup", "type": "structure"},
+        {"text": "全程不重复部署 _bsp_common.py（codecross/domaintrace 检测它已就位）", "type": "no_duplicate"},
+        {"text": "三 skill 各自向 AGENTS.md 注入自己的标记块，互不破坏", "type": "contains_concept"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/codenav setup-all 但 codeindex Phase 4 冒烟失败（compdb 为空）",
+      "expected_output": "立即停止，输出 codeindex 失败原因；不进入 codecross / domaintrace",
+      "files": [],
+      "assertions": [
+        {"text": "stop 在 codeindex 阶段", "type": "structure"},
+        {"text": "明确告知是 compdb 失败而非别的", "type": "contains_concept"},
+        {"text": "未触发 codecross 或 domaintrace 的部署", "type": "no_action"}
+      ]
+    }
+  ]
+}
