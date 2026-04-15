@@ -1,1 +1,73 @@
-[]
+{
+  "skill_name": "androidbsp-domaintrace-setup",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/domaintrace setup",
+      "expected_output": "前置（codenav/scripts/_bsp_common.py 等三件齐 + 版本兼容）满足后，把 14 个领域脚本 + bootcfg_trace.py + apex_locate.py 拷到 .codenav/scripts/，用 _inject_block.sh 幂等注入 AGENTS.md.domaintrace.template，最后冒烟验证",
+      "files": [],
+      "assertions": [
+        {"text": "前置改成工件检测 + require_version，不再 grep AGENTS.md", "type": "contains_concept"},
+        {"text": "部署目标是 .codenav/scripts/ 而非项目根 scripts/", "type": "structure"},
+        {"text": "bootcfg_trace.py 和 apex_locate.py 也在部署清单内", "type": "contains_concept"},
+        {"text": "AGENTS.md 注入是 _inject_block.sh 单行调用（带 marker + 版本号），不再 cat 追加", "type": "contains_concept"},
+        {"text": "末尾有「姐妹 skill」+「未来 runtime-trace 接入」两段", "type": "contains_concept"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "在 atk 上跑 python3 .codenav/scripts/dt_bind.py --compatible rockchip,rk3568-pcie",
+      "expected_output": "DTS-NODE + DRV-MATCH + PROBE 至少各 1 条",
+      "files": [],
+      "assertions": [
+        {"text": "DTS 文件中 compatible 字符串命中", "type": "contains_concept"},
+        {"text": "driver 中 of_device_id / of_match_table 命中", "type": "contains_concept"},
+        {"text": "如果有 overlay (DTBO)，识别 DTBO-OVERLAY tag", "type": "contains_concept"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "在 atk 上跑 python3 .codenav/scripts/kconfig_trace.py --config CONFIG_DRM_ROCKCHIP",
+      "expected_output": "DEFCONFIG + KCONFIG-DEF + KCONFIG-REF + MAKEFILE-OBJ + CODE-IFDEF/IS-ENABLED 多种 tag",
+      "files": [],
+      "assertions": [
+        {"text": "GKI multi-kernel-root 探测能找到所有候选 kernel root（kernel/common, kernel/private, kernel/<vendor>* 等）", "type": "contains_concept"},
+        {"text": "输出 MAKEFILE-OBJ + CODE-IFDEF + CODE-IS-ENABLED 等多种 tag 类型，覆盖完整 Kconfig→代码链路", "type": "contains_concept"},
+        {"text": "不会扫到 u-boot（u-boot 有自己的 Kconfig，与 kernel 解耦）", "type": "no_hardcode"}
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "在 atk 上跑 python3 .codenav/scripts/binder_svc.py --service android.hardware.camera.provider",
+      "expected_output": "注册位置 + 进程 + VINTF manifest 关联",
+      "files": [],
+      "assertions": [
+        {"text": "addService / IServiceManager 注册命中", "type": "contains_concept"},
+        {"text": "VINTF 多分区 manifest 探测（system / vendor / odm / system_ext / product / apex）", "type": "contains_concept"},
+        {"text": "compatibility_matrix.<level>.xml 多版本探测", "type": "contains_concept"}
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "在 atk 上跑 python3 .codenav/scripts/selinux_trace.py --domain untrusted_app",
+      "expected_output": "TE 文件 + contexts + mapping 文件命中",
+      "files": [],
+      "assertions": [
+        {"text": "多分区 sepolicy 探测（plat/vendor/odm/system_ext + system/sepolicy + device/<vendor>/sepolicy）", "type": "contains_concept"},
+        {"text": "识别 mapping/<sdk>.cil 兼容层文件 + .cil 现代格式", "type": "contains_concept"},
+        {"text": "盲区不存在时输出 WARN finding，不报错", "type": "contains_concept"}
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "在 atk 上跑 python3 .codenav/scripts/apex_locate.py com.android.media",
+      "expected_output": "APEX-DEF + APEX-MANIFEST + APEX-INSTALL（如果该 APEX 已编译）",
+      "files": [],
+      "assertions": [
+        {"text": "Soong apex {} block 中 name 字段匹配（.bp 多行匹配）", "type": "contains_concept"},
+        {"text": "解析 apex_manifest.json 或 apex_manifest.pb（version 字段）", "type": "contains_concept"},
+        {"text": "反向 lookup 模式（--reverse）能从库/二进制名找到包含它的 APEX", "type": "contains_concept"}
+      ]
+    }
+  ]
+}

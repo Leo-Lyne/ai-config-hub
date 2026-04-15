@@ -1,0 +1,71 @@
+{
+  "skill_name": "androidbsp-codeindex-setup",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/codeindex setup source build/envsetup.sh && lunch rk3568_r-userdebug && ./build.sh -UKAp -J28",
+      "expected_output": "在已编译通过的 RK3568 BSP 上完整执行 5 个 Phase：Gate → install_tools.py → bsp_filter_gen.py(-b) → compdb+gtags+clangd → 验证 → 拷贝 AGENTS.md/clangd 模板并接入 CLAUDE.md",
+      "files": [],
+      "assertions": [
+        {"text": "前置要求：检查了 build/envsetup.sh + device/、out/、ninja 构建图、out/target/product 四项，未编译即终止", "type": "contains_concept"},
+        {"text": "Phase 1：调用了 deps/install_tools.py 而不是手写 apt 命令", "type": "contains_concept"},
+        {"text": "Phase 2：将 bsp_filter_gen.py 拷入项目，用 -b 传入 lunch 命令生成 .active_files.idx", "type": "contains_concept"},
+        {"text": "Phase 3：gtags 以 .active_files.idx 过滤后的文件列表作为输入（而不是全量 find）", "type": "contains_concept"},
+        {"text": "Phase 3：设置了 GTAGSLABEL=new-ctags", "type": "contains_concept"},
+        {"text": "Phase 4：跑了 compdb/gtags/arg 的冒烟验证", "type": "contains_concept"},
+        {"text": "Phase 5：从 assets/AGENTS.md.template 拷贝而不是现场生成检索规则正文", "type": "contains_concept"},
+        {"text": "CLAUDE.md 只写 @AGENTS.md 一行，不重复 AGENTS.md 的正文", "type": "no_duplicate"},
+        {"text": "没有绝对路径硬编码（/home/xxx）或 rockchip 以外平台的特化", "type": "no_hardcode"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/codeindex setup source build/envsetup.sh && lunch lahaina-userdebug && make -j32",
+      "expected_output": "在 Qualcomm lahaina BSP 上执行相同流程，脚本自动识别 vendor=qcom，无任何 Rockchip 特化",
+      "files": [],
+      "assertions": [
+        {"text": "传给 bsp_filter_gen.py 的 -b 参数正确是 lahaina-userdebug", "type": "contains_concept"},
+        {"text": "没有引用 rk3568 / rockchip / mediatek / 展锐 等其它平台的路径或命令", "type": "no_hardcode"},
+        {"text": "AGENTS.md 从模板拷贝过来，未重写", "type": "contains_concept"},
+        {"text": "前置要求检查在 Phase 1 之前执行", "type": "structure"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "我刚切了 lunch target，原来是 rk3568 现在改成 rk3588，已经重新整编过了。怎么最快速地更新索引？",
+      "expected_output": "只需重跑 Phase 2+3（重建 .active_files.idx，再基于新 idx 重建 gtags 与 compdb）；Phase 1 工具不动，Phase 5 模板已就位也不必重拷",
+      "files": [],
+      "assertions": [
+        {"text": "指出 Phase 2 + Phase 3 需要重跑，明确不必重装工具", "type": "contains_concept"},
+        {"text": "强调 gtags.files 来自新的 .active_files.idx（顺序正确）", "type": "contains_concept"},
+        {"text": "没有建议重复拷贝 AGENTS.md.template（除非用户说模板更新了）", "type": "no_duplicate"},
+        {"text": "给出可直接运行的具体命令", "type": "actionable"}
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "我在一台没有网络的构建服务器上想装这个 skill 需要的 ripgrep/gtags/clangd 等工具，该怎么办？",
+      "expected_output": "说明用 deps/fetch_deps.py 在联网机器上预抓 .deb 到 packages/，把整个 skill 拷到目标机后跑 install_tools.py --offline",
+      "files": [],
+      "assertions": [
+        {"text": "提到在联网机器上先跑 deps/fetch_deps.py 填充 packages/", "type": "contains_concept"},
+        {"text": "说明在目标机用 python3 deps/install_tools.py --offline", "type": "contains_concept"},
+        {"text": "提醒 .deb 与目标机的 Ubuntu 版本/架构需匹配（amd64 != arm64）", "type": "contains_concept"},
+        {"text": "没有建议 pip install 或从 GitHub release 手动下载（偏离本 skill 的离线方案）", "type": "no_detour"}
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "在 atk-rk3568 上跑完 /codeindex setup 后，验证 .codenav/ 布局正确",
+      "expected_output": ".codenav/scripts/_bsp_common.py 存在；.codenav/active_files.idx 行数与 baseline 相近；compile_commands.json + GTAGS 仍在根目录（工具硬性要求）",
+      "files": [],
+      "assertions": [
+        {"text": "_bsp_common.py 由 codeindex Phase 2 部署到 .codenav/scripts/，由 packaging.version 比较版本只在 skill 自带版本更新时覆盖", "type": "contains_concept"},
+        {"text": "active_files.idx 在 .codenav/ 而不是根目录，重跑时 mv 旧文件为 .idx.prev", "type": "structure"},
+        {"text": "compile_commands.json / GTAGS 仍在根目录（clangd 与 gtags 硬性要求 parent dir 搜索）", "type": "structure"},
+        {"text": "AGENTS.md 中存在 BEGIN: androidbsp-codeindex-setup v=2 标记块（包含历史证据 + 已知盲区段）", "type": "contains_concept"},
+        {"text": "Phase 4 末尾输出 Kotlin/Rust 文件量 INFO（如 BSP 内有 >100 个）", "type": "contains_concept"}
+      ]
+    }
+  ]
+}

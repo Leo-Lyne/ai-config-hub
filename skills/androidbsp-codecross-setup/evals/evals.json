@@ -48,6 +48,29 @@
         {"text": "指出要重跑的是 androidbsp-codeindex-setup（重建 gtags/compdb），而不是本 skill", "type": "contains_concept"},
         {"text": "没有越界去讲 .active_files.idx / gtags 怎么重建的具体步骤（那是索引 skill 的职责）", "type": "no_duplicate"}
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "在 atk 上跑 python3 .codenav/scripts/aidl_bridge.py --interface IRadio",
+      "expected_output": "至少 3 条命中，包含 AIDL 接口定义 + 可能的多 backend 生成路径（cpp/ndk/java/rust 之一）",
+      "files": [],
+      "assertions": [
+        {"text": "命中数 >= 3（AIDL-IFACE 接口 + GEN-* backend stub 路径）", "type": "contains_concept"},
+        {"text": "识别多 backend (cpp/ndk/java/rust) 的生成路径下 -V<n>-<backend>-source/ 命名约定", "type": "contains_concept"},
+        {"text": "events.jsonl 中有对应 source=static-rg 的 event 记录，schema 为 androidbsp.event/v1", "type": "contains_concept"},
+        {"text": "若存在 aidl_api/<iface>/V<n>/ 目录，输出 AIDL-VERSIONS finding 列举所有 stable 版本", "type": "contains_concept"}
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "在 atk 上跑 python3 .codenav/scripts/syscall_trace.py openat",
+      "expected_output": "USER-WRAPPER + KERNEL-ENTRY 至少各 1 条",
+      "files": [],
+      "assertions": [
+        {"text": "userspace bionic / libc 实现命中（USER-WRAPPER tag）", "type": "contains_concept"},
+        {"text": "kernel SYSCALL_DEFINE 命中（KERNEL-ENTRY tag）", "type": "contains_concept"},
+        {"text": "前置 _bsp_common.py + compile_commands.json + GTAGS 三件齐才能跑", "type": "structure"}
+      ]
     }
   ]
 }
