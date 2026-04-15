@@ -1,0 +1,6 @@
+{
+  "extraPaths": [
+    "skills/androidbsp-codeindex-setup/scripts"
+  ],
+  "reportMissingImports": "warning"
+}
