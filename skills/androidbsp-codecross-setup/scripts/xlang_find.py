@@ -14,7 +14,7 @@
 
   跨特权（syscall/ioctl）：
     - SYS_xxx / __NR_xxx / sys_xxx      -> syscall_trace.py --name
-    - 纯数字或 0x... 且带 --syscall     -> syscall_trace.py --nr
+    - 纯数字或 0x... 且带 --syscall-nr  -> syscall_trace.py --nr
     - 全大写下划线宏 + 看起来像 _IO     -> ioctl_trace.py --macro
     - /dev/* 或 /proc/* 或 /sys/*       -> 提示 fops / show_store 搜索
     - xxx_ioctl 函数名                   -> ioctl_trace.py --handler
@@ -32,16 +32,18 @@
   xlang_find.py --syscall-nr 56
 """
 
+from __future__ import annotations
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _bsp_common import make_parser, require_version
+
+require_version("1.0.0")
+
 SCRIPT_DIR = Path(__file__).resolve().parent
-
-
-def dispatch(cmd):
-    return subprocess.call([sys.executable] + cmd)
 
 
 def looks_like_aidl_interface(s: str) -> bool:
@@ -64,7 +66,6 @@ def looks_like_ioctl_macro(s: str) -> bool:
     """经验式：全大写 + 下划线，长度 >= 4，且不像 AIDL/JNI。"""
     if not re.match(r'^[A-Z][A-Z0-9_]{3,}$', s):
         return False
-    # 排除明显不是 ioctl 的
     if s.startswith('SYS_') or s.startswith('__NR_'):
         return False
     return True
@@ -109,62 +110,86 @@ def hint_devpath(path: str):
         print(f'#   rg -n \'proc_create\\w*\\([^,]*"{leaf}"\' -g "*.c"', file=sys.stderr)
 
 
-def main():
-    if len(sys.argv) == 1 or sys.argv[1] in ('-h', '--help'):
-        print(__doc__)
-        sys.exit(0)
+def _forward_common_flags(args) -> list[str]:
+    """Propagate --root/--json/--no-events/--timeout to the target script."""
+    out = []
+    if getattr(args, 'json', False):
+        out.append('--json')
+    if getattr(args, 'no_events', False):
+        out.append('--no-events')
+    if getattr(args, 'root', None):
+        out += ['--root', str(args.root)]
+    if getattr(args, 'timeout', None):
+        out += ['--timeout', str(args.timeout)]
+    return out
 
-    root_args = []
-    if '--root' in sys.argv:
-        i = sys.argv.index('--root')
-        if i + 1 < len(sys.argv):
-            root_args = ['--root', sys.argv[i+1]]
-            del sys.argv[i:i+2]
+
+def dispatch(script: str, extra: list[str], common: list[str]) -> int:
+    cmd = [sys.executable, str(SCRIPT_DIR / script)] + extra + common
+    return subprocess.call(cmd)
+
+
+def main():
+    p = make_parser('codecross dispatcher: route symbol to bridge/trace script')
+    p.add_argument('symbol', nargs='?', help='symbol, FQCN, path, or macro')
+    p.add_argument('method', nargs='?', help='second positional (for FQCN method)')
+    p.add_argument('--syscall-nr', help='force syscall_trace --nr')
+    p.add_argument('--ioctl-cmd', help='force ioctl_trace --cmd')
+    p.add_argument('--force', choices=['jni', 'aidl', 'syscall', 'ioctl'],
+                   help='bypass routing heuristic (target only, needs symbol)')
+    args = p.parse_args()
+
+    common = _forward_common_flags(args)
 
     # 显式 --syscall-nr N
-    if '--syscall-nr' in sys.argv:
-        i = sys.argv.index('--syscall-nr')
-        if i + 1 < len(sys.argv):
-            return dispatch([str(SCRIPT_DIR / 'syscall_trace.py'),
-                             '--nr', sys.argv[i+1]] + root_args)
+    if args.syscall_nr is not None:
+        return dispatch('syscall_trace.py', ['--nr', args.syscall_nr], common)
 
     # 显式 --ioctl-cmd 0x...
-    if '--ioctl-cmd' in sys.argv:
-        i = sys.argv.index('--ioctl-cmd')
-        if i + 1 < len(sys.argv):
-            return dispatch([str(SCRIPT_DIR / 'ioctl_trace.py'),
-                             '--cmd', sys.argv[i+1]] + root_args)
+    if args.ioctl_cmd is not None:
+        return dispatch('ioctl_trace.py', ['--cmd', args.ioctl_cmd], common)
 
-    argv = [a for a in sys.argv[1:] if not a.startswith('--')]
-
-    # 两个位置参数：FQCN + method
-    if len(argv) == 2 and '.' in argv[0] and re.match(r'^\w+$', argv[1]):
-        return dispatch([str(SCRIPT_DIR / 'jni_bridge.py'),
-                         '--from-java', argv[0], argv[1]] + root_args)
-
-    if len(argv) != 1:
-        print(f'unexpected args: {argv}', file=sys.stderr)
+    if not args.symbol:
         print(__doc__)
         sys.exit(1)
 
-    sym = argv[0]
+    # 两个位置参数：FQCN + method
+    if args.method and '.' in args.symbol and re.match(r'^\w+$', args.method):
+        return dispatch('jni_bridge.py',
+                        ['--from-java', args.symbol, args.method], common)
+
+    sym = args.symbol
+
+    # --force 覆盖
+    if args.force:
+        if args.force == 'jni':
+            if looks_like_jni_c(sym):
+                return dispatch('jni_bridge.py', ['--from-c', sym], common)
+            print(f'# --force jni 需要 Java_* 形态符号', file=sys.stderr)
+            sys.exit(1)
+        if args.force == 'aidl':
+            return dispatch('aidl_bridge.py', ['--interface', sym], common)
+        if args.force == 'syscall':
+            sc = looks_like_syscall_name(sym) or sym
+            return dispatch('syscall_trace.py', [sc], common)
+        if args.force == 'ioctl':
+            if looks_like_ioctl_handler(sym):
+                return dispatch('ioctl_trace.py', ['--handler', sym], common)
+            return dispatch('ioctl_trace.py', ['--macro', sym], common)
 
     # 顺序很重要：更具体的模式先判
     if looks_like_jni_c(sym):
-        return dispatch([str(SCRIPT_DIR / 'jni_bridge.py'),
-                         '--from-c', sym] + root_args)
+        return dispatch('jni_bridge.py', ['--from-c', sym], common)
 
     if looks_like_aidl_interface(sym):
-        return dispatch([str(SCRIPT_DIR / 'aidl_bridge.py'),
-                         '--interface', sym] + root_args)
+        return dispatch('aidl_bridge.py', ['--interface', sym], common)
 
     sc = looks_like_syscall_name(sym)
     if sc is not None:
-        return dispatch([str(SCRIPT_DIR / 'syscall_trace.py'), sc] + root_args)
+        return dispatch('syscall_trace.py', [sc], common)
 
     if looks_like_ioctl_handler(sym):
-        return dispatch([str(SCRIPT_DIR / 'ioctl_trace.py'),
-                         '--handler', sym] + root_args)
+        return dispatch('ioctl_trace.py', ['--handler', sym], common)
 
     if looks_like_devpath(sym):
         hint_devpath(sym)
@@ -173,12 +198,11 @@ def main():
     split = split_fqcn_method(sym)
     if split:
         fqcn, method = split
-        return dispatch([str(SCRIPT_DIR / 'jni_bridge.py'),
-                         '--from-java', fqcn, method] + root_args)
+        return dispatch('jni_bridge.py',
+                        ['--from-java', fqcn, method], common)
 
     if looks_like_ioctl_macro(sym):
-        return dispatch([str(SCRIPT_DIR / 'ioctl_trace.py'),
-                         '--macro', sym] + root_args)
+        return dispatch('ioctl_trace.py', ['--macro', sym], common)
 
     # 退路：gtags 普通符号查找
     print(f'# 无法识别符号形态，退回 gtags 通用查找：{sym}', file=sys.stderr)
