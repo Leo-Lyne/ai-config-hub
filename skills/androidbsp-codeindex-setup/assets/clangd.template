@@ -1,0 +1,16 @@
+# .clangd — Android BSP 通用配置
+# 由 androidbsp-codeindex-setup skill 部署
+CompileFlags:
+  Remove:
+    - -mno-global-merge
+    - -fdebug-prefix-map=*
+    - --target=*
+    - -Wa,*
+    - -fno-ipa-sra
+    - -march=armv8-2a*
+    - -ffile-prefix-map=*
+    - -fmacro-prefix-map=*
+  Add:
+    - -Wno-everything
+Index:
+  Background: Build
