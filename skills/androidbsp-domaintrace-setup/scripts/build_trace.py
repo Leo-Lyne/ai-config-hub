@@ -93,6 +93,16 @@ def trace_module(e: Emitter, bsp_root: Path, name: str):
 
     _check_vndk(e, bsp_root, name)
 
+    # APEX-OWNER：模块被哪个 apex {} 块直接包含（简单识别，
+    # 完整 APEX 信息走 apex_locate.py）
+    for hit in rg_find(rf'apex\s*\{{[^}}]*name:\s*"[^"]*{re.escape(name)}',
+                       globs=['*.bp'], root=bsp_root,
+                       extra=['-U', '--multiline-dotall']):
+        e.emit(Finding(tag='APEX-OWNER', file=hit[0], line=hit[1],
+                       snippet=hit[2][:200],
+                       info={'note': 'use apex_locate.py for full APEX info'}),
+               confidence='med', source='static-rg', tags=['apex'])
+
 
 def _find_module_type(e: Emitter, bsp_root: Path, fpath: str,
                       name_line: int, module_name: str):
