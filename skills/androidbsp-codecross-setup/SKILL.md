@@ -84,6 +84,10 @@ chmod +x .codenav/scripts/*.py
 cd $BSP_ROOT
 .codenav/scripts/_inject_block.sh androidbsp-codecross-setup \
   $SKILL_DIR/assets/AGENTS.md.codecross.template AGENTS.md
+
+# Claude Code：完整跨边界追踪指引（hook 按需注入）
+mkdir -p .claude/contexts
+cp $SKILL_DIR/assets/xlang_full.md .claude/contexts/xlang.md
 ```
 
 Claude Code / Cursor / Codex 不需要再配——它们已由 `androidbsp-codeindex-setup` 接入同一份

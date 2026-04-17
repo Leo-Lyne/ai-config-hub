@@ -118,6 +118,10 @@ chmod +x .codenav/scripts/*.py
 cd $BSP_ROOT
 .codenav/scripts/_inject_block.sh androidbsp-domaintrace-setup \
   $SKILL_DIR/assets/AGENTS.md.domaintrace.template AGENTS.md
+
+# Claude Code：完整领域追踪指引（hook 按需注入）
+mkdir -p .claude/contexts
+cp $SKILL_DIR/assets/domain_full.md .claude/contexts/domain.md
 ```
 
 同版本已注入 → 跳过；模板升 `v=N` → 替换 BEGIN…END 之间的块；未注入过 → 追加。

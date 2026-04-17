@@ -217,6 +217,10 @@ cd $BSP_ROOT
 # 主模板：AGENTS.md（opencode / Codex / antigravity 直接读）
 cp $SKILL_DIR/assets/AGENTS.md.template AGENTS.md
 
+# Claude Code：完整索引指引（hook 按需注入）
+mkdir -p .claude/contexts
+cp $SKILL_DIR/assets/codeindex_full.md .claude/contexts/codeindex.md
+
 # Claude Code：一行 import
 [ -f CLAUDE.md ] && grep -q '@AGENTS.md' CLAUDE.md || echo '@AGENTS.md' >> CLAUDE.md
 
