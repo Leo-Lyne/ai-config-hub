@@ -7,6 +7,7 @@ HUB_DIR="$HOME/ai-config-hub"
 ANTI_SKILLS_DIR="$HOME/.gemini/antigravity/skills"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 CURSOR_SKILLS_DIR="$HOME/.cursor/skills"
+CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
 
 # 检查 Hub 目录
 if [ ! -d "$HUB_DIR" ]; then
@@ -37,6 +38,18 @@ if [ -d "$HUB_DIR/repos/antigravity-skills/skills" ]; then
         name=$(basename "$skill_dir")
         # echo "Linking community skill: $name"
         ln -sfn "$skill_dir" "$ANTI_SKILLS_DIR/$name"
+    done
+fi
+
+echo "--- 正在同步 Slash Commands ---"
+
+if [ -d "$HUB_DIR/commands" ]; then
+    mkdir -p "$CLAUDE_COMMANDS_DIR"
+    for cmd_file in "$HUB_DIR/commands"/*.md; do
+        [ -f "$cmd_file" ] || continue
+        name=$(basename "$cmd_file")
+        echo "Linking command: /$name"
+        ln -sfn "$cmd_file" "$CLAUDE_COMMANDS_DIR/$name"
     done
 fi
 
