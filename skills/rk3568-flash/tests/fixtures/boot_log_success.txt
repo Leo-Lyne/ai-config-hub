@@ -1,0 +1,11 @@
+[2026-04-25 15:30:01] DDR Version V1.10 20220815
+[2026-04-25 15:30:01] In
+[2026-04-25 15:30:02] LPDDR4X
+[2026-04-25 15:30:02] DDR4 1056MHz
+[2026-04-25 15:30:03] U-Boot 2017.09 (RK3568)
+[2026-04-25 15:30:04] Trying to boot from MMC1
+[2026-04-25 15:30:05] android_bootloader_boot_kernel
+[2026-04-25 15:30:08] Linux version 4.19.232 (build@host) ...
+[2026-04-25 15:30:12] init: starting service 'logd'
+[2026-04-25 15:30:18] init: Service 'bootanim' (pid 1234) started
+[2026-04-25 15:30:35] Boot is finished (12345 ms)

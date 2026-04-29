@@ -1,0 +1,13 @@
+{
+  "device_serial": "71b9bc8b93cb9f68",
+  "last_flash_at": "2026-04-25T15:30:00+08:00",
+  "image_dir": "/REPLACED/AT/RUNTIME",
+  "files": {
+    "boot.img":       {"mtime": 1745568000},
+    "dtbo.img":       {"mtime": 1745568000},
+    "super.img":      {"mtime": 1745568000},
+    "recovery.img":   {"mtime": 1745568000},
+    "vbmeta.img":     {"mtime": 1745568000},
+    "uboot.img":      {"mtime": 1745568000}
+  }
+}

@@ -1,0 +1,83 @@
+[
+  {
+    "query": "我刚改了 kernel/init/main.c 加了个 pr_emerg，./build.sh -K 编完了，现在想把 boot 烧到我的 ATK-DLRK3568 板上，板子目前在 Android 系统里",
+    "should_trigger": true
+  },
+  {
+    "query": "板子昨天烧崩了，现在按 UPDATE 进 MaskRom 了，Windows 设备管理器看到 Rockusb，怎么救",
+    "should_trigger": true
+  },
+  {
+    "query": "I just rebuilt the kernel and dtbo. Reflash both partitions to the rk3568 dev board please",
+    "should_trigger": true
+  },
+  {
+    "query": "I'm on a fresh Linux laptop with no Windows, can I still flash images to my RK3568 board?",
+    "should_trigger": true
+  },
+  {
+    "query": "burn the latest IMAGE/.../IMAGES/ to my board",
+    "should_trigger": true
+  },
+  {
+    "query": "/rk3568-flash auto",
+    "should_trigger": true
+  },
+  {
+    "query": "板子能 adb 但 reboot loader 之后烧不上，windows 那边 upgrade_tool 看不到设备",
+    "should_trigger": true
+  },
+  {
+    "query": "把 super.img 单独刷一下，Android 部分有改动",
+    "should_trigger": true
+  },
+  {
+    "query": "要不要试一下用虚拟机走 linux 的烧录流程，不想依赖 windows 驱动",
+    "should_trigger": true
+  },
+  {
+    "query": "give me a one-line command to factory-reset and reflash this rk3568 device",
+    "should_trigger": true
+  },
+
+  {
+    "query": "我的 rk3568 dts 编译报错，找不到 evb1 的 ddr4 配置",
+    "should_trigger": false
+  },
+  {
+    "query": "想从板子上 dump 出当前的 boot 分区到本地保存做备份",
+    "should_trigger": false
+  },
+  {
+    "query": "adb 连不上板子，/dev/ttyUSB0 也没有，是不是 usbipd 没 attach",
+    "should_trigger": false
+  },
+  {
+    "query": "帮我抓一下板子启动的 UART 日志看 kernel panic 具体在哪",
+    "should_trigger": false
+  },
+  {
+    "query": "怎么进 Loader 模式，按哪个键？",
+    "should_trigger": false
+  },
+  {
+    "query": "I want to install Ubuntu in a VirtualBox VM headlessly with cloud-init",
+    "should_trigger": false
+  },
+  {
+    "query": "build the kernel with my custom defconfig — make ARCH=arm64 rockchip_defconfig android-11.config",
+    "should_trigger": false
+  },
+  {
+    "query": "rk3568 的 GPIO 怎么配 pinctrl，DTS 里 rockchip,pins 那一段语法",
+    "should_trigger": false
+  },
+  {
+    "query": "where does Android put the boot partition when AB partitioning is on?",
+    "should_trigger": false
+  },
+  {
+    "query": "compare md5 of boot.img on my disk against what's flashed on the device",
+    "should_trigger": false
+  }
+]
