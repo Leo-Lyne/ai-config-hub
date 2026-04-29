@@ -18,7 +18,7 @@ Usage:
     # Show current scope
     python link.py --list
 
-    # Use '*' to expose all collections under ~/docs/index
+    # Use '*' to expose all collections under ~/docs/.docsindex
     python link.py '*'
 """
 from __future__ import annotations
@@ -30,8 +30,8 @@ import sys
 from pathlib import Path
 
 
-DOCS_ROOT = Path.home() / "docs"
-INDEX_ROOT = DOCS_ROOT / "index"
+DOCS_ROOT = Path.home() / "MyLibrary"
+INDEX_ROOT = DOCS_ROOT / ".docsindex"
 SERVER_PATH = Path.home() / ".local/share/mcp-servers/docsindex/server.py"
 DEFAULT_SERVER_NAME = "docs"
 
