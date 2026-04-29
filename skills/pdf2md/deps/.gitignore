@@ -1,0 +1,9 @@
+# The venv is per-machine; rebuild via deps/install.sh
+.venv/
+
+# Wheels are huge (~3-5 GB) — fetch on demand via deps/fetch_deps.sh
+wheels/*.whl
+wheels/*.tar.gz
+
+# Keep the directory + manifest
+!wheels/.gitkeep

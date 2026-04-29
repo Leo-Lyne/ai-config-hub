@@ -1,0 +1,3 @@
+# Top-level pdf2md dependencies. Pin point versions in requirements.txt
+# (run deps/fetch_deps.sh to refresh that lock file from this).
+marker-pdf
