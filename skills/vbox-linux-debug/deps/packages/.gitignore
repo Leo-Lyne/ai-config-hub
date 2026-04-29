@@ -1,0 +1,11 @@
+# Downloaded artifacts (run deps/fetch_deps.sh to populate)
+*.exe
+*.vbox-extpack
+*.img
+*.iso
+*.partial
+
+# Keep the manifest + this gitignore
+!.gitignore
+!MANIFEST.txt
+!README.md
